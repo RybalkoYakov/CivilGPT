@@ -9,6 +9,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
 using CivilGPT.Models;
+using CivilGPT.Models.OpenAI;
 using CivilGPT.Services;
 
 namespace CivilGPT
@@ -19,13 +20,14 @@ namespace CivilGPT
     public partial class MainWindow : Window
     {
         private readonly ChatSession _chatSession = new ChatSession();
+        private readonly ChatRequest _chatRequest = new ChatRequest();
         private readonly OpenAIService _openAIService;
 
 
         public MainWindow()
         {
             InitializeComponent();
-            _openAIService = new OpenAIService(_chatSession);
+            _openAIService = new OpenAIService(_chatSession, _chatRequest);
         }
 
         private async void SendButton_Click(object sender, RoutedEventArgs e)

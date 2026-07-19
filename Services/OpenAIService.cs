@@ -1,4 +1,5 @@
 ﻿using CivilGPT.Models;
+using CivilGPT.Models.OpenAI;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -12,16 +13,18 @@ namespace CivilGPT.Services
     {
         private readonly ChatSession _chatSession;
         private readonly HttpClient _httpClient;
+        private readonly ChatRequest _chatRequest;
 
-        public OpenAIService(ChatSession chatSession)
+        public OpenAIService(ChatSession chatSession, ChatRequest chatRequest)
         {
             _chatSession = chatSession;
+            _chatRequest = chatRequest;
             _httpClient = new HttpClient();
         }
 
         public async Task SendMessage(string prompt)
         {
-            await Task.Delay(3000);
+            await Task.Delay(0);
             _chatSession.AddMessage(new ChatMessage(MessageRole.User, prompt));
 
             prompt = prompt.Trim().ToLower();
