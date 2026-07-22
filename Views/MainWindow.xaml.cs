@@ -20,14 +20,13 @@ namespace CivilGPT
     public partial class MainWindow : Window
     {
         private readonly ChatSession _chatSession = new ChatSession();
-        private readonly ChatRequest _chatRequest = new ChatRequest();
         private readonly OpenAIService _openAIService;
 
 
         public MainWindow()
         {
             InitializeComponent();
-            _openAIService = new OpenAIService(_chatSession, _chatRequest);
+            _openAIService = new OpenAIService(_chatSession);
         }
 
         private async void SendButton_Click(object sender, RoutedEventArgs e)
