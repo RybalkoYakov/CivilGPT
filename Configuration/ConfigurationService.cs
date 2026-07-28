@@ -7,7 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-namespace CivilGPT.Services
+namespace CivilGPT.Configuration
 {
     public class ConfigurationService
     {

@@ -1,13 +1,14 @@
-﻿using CivilGPT.Models;
+﻿using CivilGPT.Configuration;
+using CivilGPT.Models;
 using CivilGPT.Models.OpenAI;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 
-namespace CivilGPT.Services
+namespace CivilGPT.AI
 {
-    public class OpenAIService
+    public class OpenAIClient
     {
         private const string ChatCompletionsUrl = "https://api.openai.com/v1/chat/completions";
 
@@ -15,7 +16,7 @@ namespace CivilGPT.Services
         private readonly ConfigurationService _configurationService;
         private readonly HttpClient _httpClient;
 
-        public OpenAIService(ChatSession chatSession)
+        public OpenAIClient(ChatSession chatSession)
         {
             _chatSession = chatSession;
             _configurationService = new ConfigurationService();
