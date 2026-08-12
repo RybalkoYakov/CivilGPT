@@ -10,7 +10,7 @@ namespace CivilGPT.AI
 {
     public class OpenAIClient
     {
-        private const string ChatCompletionsUrl = "https://api.openai.com/v1/chat/completions";
+        private const string ChatCompletionsUrl = "https://openrouter.ai/api/v1/chat/completions";
 
         private readonly ChatSession _chatSession;
         private readonly ConfigurationService _configurationService;

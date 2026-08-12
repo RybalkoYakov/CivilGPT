@@ -4,7 +4,7 @@ namespace CivilGPT.Models.OpenAI
 {
     public class ChatRequest
     {
-        public string Model { get; set; } = "gpt-4.1-mini";
+        public string Model { get; set; } = "openai/gpt-4o";
 
         public List<Message> Messages { get; set; } = new();
 
