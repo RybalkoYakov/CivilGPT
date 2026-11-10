@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Runtime;
@@ -9,13 +9,13 @@ using CivilGPT.Models;
 namespace CivilGPT.Commands
 {
     /// <summary>
-    /// РљРѕРјР°РЅРґС‹ РїРѕСЃС‚СЂРѕРµРЅРёСЏ РїРѕРІРµСЂС…РЅРѕСЃС‚РµР№ Civil 3D.
+    /// Команды построения поверхностей Civil 3D.
     /// </summary>
     public class SurfaceCommands
     {
         /// <summary>
-        /// РџРѕСЃС‚СЂРѕРµРЅРёРµ TIN-РїРѕРІРµСЂС…РЅРѕСЃС‚Рё РїРѕ РіРѕСЂРёР·РѕРЅС‚Р°Р»СЏРј Рё РѕС‚РјРµС‚РєР°Рј.
-        /// Enter РЅР° Р·Р°РїСЂРѕСЃРµ РІС‹Р±РѕСЂР° вЂ” РёСЃРїРѕР»СЊР·РѕРІР°С‚СЊ РІСЃС‘ РїСЂРѕСЃС‚СЂР°РЅСЃС‚РІРѕ РјРѕРґРµР»Рё.
+        /// Построение TIN-поверхности по горизонталям и отметкам.
+        /// Enter на запросе выбора — использовать всё пространство модели.
         /// </summary>
         [CommandMethod("TINSURFACEFROMCONTOURS")]
         public void CreateTinFromContours()
@@ -24,7 +24,7 @@ namespace CivilGPT.Commands
 
             if (!CadApplication.IsCivilAvailable)
             {
-                editor.WriteError("РђРєС‚РёРІРЅС‹Р№ РґРѕРєСѓРјРµРЅС‚ РЅРµ СЏРІР»СЏРµС‚СЃСЏ РґРѕРєСѓРјРµРЅС‚РѕРј Civil 3D.");
+                editor.WriteError("Активный документ не является документом Civil 3D.");
                 return;
             }
 
@@ -33,10 +33,10 @@ namespace CivilGPT.Commands
                 SurfaceName = TinSurfaceOptions.SuggestSurfaceName()
             };
 
-            string surfaceName = editor.GetString($"\nРРјСЏ РїРѕРІРµСЂС…РЅРѕСЃС‚Рё <{options.SurfaceName}>");
+            string surfaceName = editor.GetString($"\nИмя поверхности <{options.SurfaceName}>");
             if (surfaceName == null)
             {
-                editor.WriteLine("РћРїРµСЂР°С†РёСЏ РѕС‚РјРµРЅРµРЅР°.");
+                editor.WriteLine("Операция отменена.");
                 return;
             }
 
@@ -46,31 +46,31 @@ namespace CivilGPT.Commands
             }
 
             ObjectId[] selected = editor.GetSelection(
-                "\nР’С‹Р±РµСЂРёС‚Рµ РіРѕСЂРёР·РѕРЅС‚Р°Р»Рё Рё РѕС‚РјРµС‚РєРё (Enter вЂ” РІРµСЃСЊ РїСЂРѕСЃС‚СЂР°РЅСЃС‚РІРѕ РјРѕРґРµР»Рё)");
+                "\nВыберите горизонтали и отметки (Enter — всё пространство модели)");
 
             bool useModelSpace = selected.Length == 0;
 
             if (useModelSpace)
             {
                 if (!editor.AskConfirmation(
-                        "\nРћР±СЉРµРєС‚С‹ РЅРµ РІС‹Р±СЂР°РЅС‹. РџРѕСЃС‚СЂРѕРёС‚СЊ РїРѕРІРµСЂС…РЅРѕСЃС‚СЊ РїРѕ РІСЃРµРјСѓ РїСЂРѕСЃС‚СЂР°РЅСЃС‚РІСѓ РјРѕРґРµР»Рё?"))
+                        "\nОбъекты не выбраны. Построить поверхность по всему пространству модели?"))
                 {
-                    editor.WriteLine("РћРїРµСЂР°С†РёСЏ РѕС‚РјРµРЅРµРЅР°.");
+                    editor.WriteLine("Операция отменена.");
                     return;
                 }
             }
 
             string summary =
-                $"\nРџРѕРІРµСЂС…РЅРѕСЃС‚СЊ: '{options.SurfaceName}'\n" +
-                $"РСЃС‚РѕС‡РЅРёРє: {(useModelSpace ? "РІСЃС‘ РїСЂРѕСЃС‚СЂР°РЅСЃС‚РІРѕ РјРѕРґРµР»Рё" : $"РІС‹Р±СЂР°РЅРѕ РѕР±СЉРµРєС‚РѕРІ: {selected.Length}")}\n" +
-                $"РЎСЂРµРґРёРЅРЅР°СЏ РѕСЂРґРёРЅР°С‚Р°: {options.MidOrdinateDistance:F3} Рј, " +
-                $"РјР°РєСЃ. СЂР°СЃСЃС‚РѕСЏРЅРёРµ: {options.MaximumDistance:F3} Рј,\n" +
-                $"РѕС‚СЃРµРёРІР°РЅРёРµ: {options.WeedingDistance:F3} Рј, " +
-                $"РґРѕРїРѕР»РЅРµРЅРёРµ: {options.SupplementingDistance:F3} Рј.";
+                $"\nПоверхность: '{options.SurfaceName}'\n" +
+                $"Источник: {(useModelSpace ? "всё пространство модели" : $"выбрано объектов: {selected.Length}")}\n" +
+                $"Срединная ордината: {options.MidOrdinateDistance:F3} м, " +
+                $"макс. расстояние: {options.MaximumDistance:F3} м,\n" +
+                $"отсеивание: {options.WeedingDistance:F3} м, " +
+                $"дополнение: {options.SupplementingDistance:F3} м.";
 
             if (!editor.AskConfirmation(summary))
             {
-                editor.WriteLine("РћРїРµСЂР°С†РёСЏ РѕС‚РјРµРЅРµРЅР°.");
+                editor.WriteLine("Операция отменена.");
                 return;
             }
 
@@ -89,7 +89,7 @@ namespace CivilGPT.Commands
                     if (sources.IsEmpty)
                     {
                         editor.WriteError(
-                            "РќРµ РЅР°Р№РґРµРЅРѕ РѕР±СЉРµРєС‚РѕРІ СЃ РѕС‚РјРµС‚РєР°РјРё. РџСЂРѕРІРµСЂСЊС‚Рµ, С‡С‚Рѕ РіРѕСЂРёР·РѕРЅС‚Р°Р»Рё РёРјРµСЋС‚ РІС‹СЃРѕС‚Сѓ (Z), РѕС‚Р»РёС‡РЅСѓСЋ РѕС‚ РЅСѓР»СЏ.");
+                            "Не найдено объектов с отметками. Проверьте, что горизонтали имеют высоту (Z), отличную от нуля.");
                         return;
                     }
 
@@ -98,27 +98,26 @@ namespace CivilGPT.Commands
 
                     transaction.Commit();
 
-                    editor.WriteLine("--- РџРѕРІРµСЂС…РЅРѕСЃС‚СЊ РїРѕСЃС‚СЂРѕРµРЅР° ---");
+                    editor.WriteLine("--- Поверхность построена ---");
                     editor.WriteLine(result.ToString());
 
                     if (result.ZeroElevationCurves > 0)
                     {
                         editor.WriteLine(
-                            $"Р’РЅРёРјР°РЅРёРµ: РіРѕСЂРёР·РѕРЅС‚Р°Р»РµР№ СЃ РЅСѓР»РµРІРѕР№ РѕС‚РјРµС‚РєРѕР№ вЂ” {result.ZeroElevationCurves}.");
+                            $"Внимание: горизонталей с нулевой отметкой — {result.ZeroElevationCurves}.");
                     }
 
                     if (result.VertexCount == 0)
                     {
                         editor.WriteLine(
-                            "Р’РЅРёРјР°РЅРёРµ: РїРѕРІРµСЂС…РЅРѕСЃС‚СЊ РЅРµ СЃРѕРґРµСЂР¶РёС‚ РІРµСЂС€РёРЅ. РџСЂРѕРІРµСЂСЊС‚Рµ РѕС‚РјРµС‚РєРё РёСЃС…РѕРґРЅС‹С… РѕР±СЉРµРєС‚РѕРІ.");
+                            "Внимание: поверхность не содержит вершин. Проверьте отметки исходных объектов.");
                     }
                 }
             }
             catch (System.Exception ex)
             {
-                editor.WriteError("РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕСЃС‚СЂРѕРёС‚СЊ РїРѕРІРµСЂС…РЅРѕСЃС‚СЊ: " + ex.Message);
+                editor.WriteError("Не удалось построить поверхность: " + ex.Message);
             }
         }
     }
 }
-

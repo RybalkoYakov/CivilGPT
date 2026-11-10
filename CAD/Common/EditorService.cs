@@ -76,10 +76,11 @@ namespace CivilGPT.CAD.Common
 
         /// <summary>
         /// Запрос подтверждения (Y/N). Enter не подтверждает операцию.
+        /// Список ключевых слов AutoCAD выводит сам, дублировать его в тексте не нужно.
         /// </summary>
         public bool AskConfirmation(string message)
         {
-            var options = new PromptKeywordOptions(message + "\nПодтвердить? [Да/Нет]")
+            var options = new PromptKeywordOptions(message + "\nПодтвердить?")
             {
                 AllowNone = false
             };
