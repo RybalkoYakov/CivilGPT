@@ -9,7 +9,8 @@ namespace CivilGPT.Commands
 {
     /// <summary>
     /// Первая команда: подготовка горизонталей.
-    /// Находит линии-горизонтали и их подписи, восстанавливает высоты
+    /// Находит линии-горизонтали и их подписи (в том числе в атрибутах блоков),
+    /// сшивает отрезки одной горизонтали, восстанавливает высоты
     /// и создаёт копии линий в виде полилиний на нужной отметке.
     /// Исходные объекты не изменяются.
     /// </summary>
@@ -54,8 +55,10 @@ namespace CivilGPT.Commands
 
             if (!editor.AskConfirmation(
                     $"\nСлой горизонталей: '{layerName}'.\n" +
-                    $"Линии и подписи этого слоя будут прочитаны, а копии линий — " +
-                    $"помещены на слой '{ContourLiftService.TargetLayerName}' с отметками по подписям.\n" +
+                    $"Все кривые этого слоя будут сшиты в цельные горизонтали, " +
+                    $"подписи прочитаны из текстов и атрибутов блоков,\n" +
+                    $"а копии линий помещены на слой '{ContourLiftService.TargetLayerName}' " +
+                    $"с вычисленными отметками.\n" +
                     $"Исходные объекты не изменяются."))
             {
                 editor.WriteLine("Операция отменена.");
@@ -74,7 +77,10 @@ namespace CivilGPT.Commands
                         document.Database,
                         new DocumentService(document).ModelSpaceId,
                         layerName,
-                        tolerance.Value);
+                        tolerance.Value,
+                        ContourLiftService.DefaultGap,
+                        ContourLiftService.DefaultLateralTolerance,
+                        ContourLiftService.DefaultAngleDegrees);
 
                     transaction.Commit();
                 }
@@ -91,8 +97,11 @@ namespace CivilGPT.Commands
         private static void Report(EditorService editor, ContourLiftResult result, string layerName)
         {
             editor.WriteLine("--- Подготовка горизонталей завершена ---");
-            editor.WriteLine($"Линий на слое '{layerName}': {result.CurvesFound}");
+            editor.WriteLine($"Кривых на слое '{layerName}': {result.CurvesFound}");
             editor.WriteLine($"Подписей распознано: {result.LabelsParsed}, привязано к линиям: {result.LabelsMatched}");
+            editor.WriteLine(
+                $"Собрано горизонталей из отрезков: {result.ChainsBuilt} " +
+                $"(с подписью {result.ChainsLabeled}, без подписи {result.ChainsUnlabeled})");
             editor.WriteLine($"Создано полилиний на слое '{ContourLiftService.TargetLayerName}': {result.ContoursCreated}");
 
             if (result.HasResult)
@@ -100,32 +109,32 @@ namespace CivilGPT.Commands
                 editor.WriteLine($"Отметки: {result.MinElevation:F2}…{result.MaxElevation:F2} м");
             }
 
-            if (result.Unlabeled > 0)
-            {
-                editor.WriteLine(
-                    $"Внимание: без подписи осталось горизонталей — {result.Unlabeled}. " +
-                    "Их высота не назначена, в поверхность они не попадут.");
-            }
-
             if (result.Unresolved > 0)
             {
                 editor.WriteLine(
-                    $"Внимание: не удалось восстановить высоту у {result.Unresolved} подписей. " +
+                    $"Внимание: не удалось восстановить высоту у {result.Unresolved} горизонталей. " +
                     "Нужна хотя бы одна полная отметка (например 205.00) на слое.");
             }
 
             if (result.Conflicts > 0)
             {
                 editor.WriteLine(
-                    $"Внимание: спорных привязок — {result.Conflicts} (на одну линию претендовали несколько подписей, " +
-                    "оставлена ближайшая).");
+                    $"Внимание: спорных привязок — {result.Conflicts} " +
+                    "(на один отрезок претендовали несколько подписей, оставлена полная или ближайшая).");
+            }
+
+            if (result.ChainsWithDifferentLabels > 0)
+            {
+                editor.WriteLine(
+                    $"Внимание: цепочек с разными подписями — {result.ChainsWithDifferentLabels}. " +
+                    "Возможно, сшились разные горизонтали — уменьшите допуск разрыва.");
             }
 
             if (!result.HasResult)
             {
                 editor.WriteLine("");
                 editor.WriteLine("Ни одной полилинии не создано. Проверьте:");
-                editor.WriteLine("  — подписи действительно лежат на линиях и на том же слое;");
+                editor.WriteLine("  — подписи лежат на слое и рядом с линиями;");
                 editor.WriteLine("  — допуск привязки достаточен (по умолчанию 1 м).");
             }
         }

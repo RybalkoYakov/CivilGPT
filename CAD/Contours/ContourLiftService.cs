@@ -17,16 +17,29 @@ namespace CivilGPT.CAD.Contours
 
         public int LabelsMatched { get; set; }
 
-        public int ContoursCreated { get; set; }
+        /// <summary>Сколько цельных горизонталей собрано из отрезков.</summary>
+        public int ChainsBuilt { get; set; }
+
+        /// <summary>Сколько горизонталей получили подпись.</summary>
+        public int ChainsLabeled { get; set; }
 
         /// <summary>Горизонтали без подписи — высоту взять неоткуда.</summary>
-        public int Unlabeled { get; set; }
+        public int ChainsUnlabeled { get; set; }
 
         /// <summary>Подписи, которые не удалось развернуть (нет ни одной полной отметки).</summary>
         public int Unresolved { get; set; }
 
-        /// <summary>Случаи, когда на одну линию претендовали несколько подписей.</summary>
+        /// <summary>Случаи, когда на один отрезок претендовали несколько подписей.</summary>
         public int Conflicts { get; set; }
+
+        /// <summary>
+        /// Цепочки, внутри которых подписи расходятся по значению.
+        /// Признак неверной сшивки: две разные горизонтали склеены в одну.
+        /// </summary>
+        public int ChainsWithDifferentLabels { get; set; }
+
+        /// <summary>Создано полилиний (по числу отрезков).</summary>
+        public int ContoursCreated { get; set; }
 
         public double MinElevation { get; set; }
 
@@ -36,20 +49,36 @@ namespace CivilGPT.CAD.Contours
     }
 
     /// <summary>
-    /// Первая команда: превратить линии-горизонтали в полилинии
-    /// с правильной высотой. Исходные объекты не изменяются — создаются копии.
+    /// Первая команда: превратить линии-горизонтали в полилинии с правильной высотой.
+    /// Отрезки одной горизонтали сшиваются, подписи читаются из атрибутов блоков.
+    /// Исходные объекты не изменяются — создаются копии.
     /// </summary>
     public static class ContourLiftService
     {
         /// <summary>Слой, в который складываются готовые горизонтали.</summary>
         public const string TargetLayerName = "CIVILGPT_TIN";
 
+        /// <summary>Допуск привязки подписи к линии по умолчанию, м.</summary>
+        public const double DefaultLabelTolerance = 1.0;
+
+        /// <summary>Допустимый разрыв между отрезками одной горизонтали, м.</summary>
+        public const double DefaultGap = 6.0;
+
+        /// <summary>Допустимое боковое смещение стыкуемых концов, м.</summary>
+        public const double DefaultLateralTolerance = 1.0;
+
+        /// <summary>Допустимый излом направления на стыке, градусы.</summary>
+        public const double DefaultAngleDegrees = 35.0;
+
         public static ContourLiftResult Lift(
             Transaction transaction,
             Database database,
             ObjectId modelSpaceId,
             string sourceLayer,
-            double labelTolerance)
+            double labelTolerance,
+            double maxGap,
+            double lateralTolerance,
+            double maxAngleDegrees)
         {
             if (transaction == null) throw new ArgumentNullException(nameof(transaction));
             if (database == null) throw new ArgumentNullException(nameof(database));
@@ -71,42 +100,58 @@ namespace CivilGPT.CAD.Contours
             if (curves.Count == 0) return result;
 
             int conflicts;
-            List<ContourAssignment> assignments =
+            Dictionary<ObjectId, ContourLabel> matched =
                 ContourLabelMatcher.Match(curves, labels, labelTolerance, out conflicts);
 
             result.Conflicts = conflicts;
-            result.LabelsMatched = assignments.Count;
-            result.Unlabeled = Math.Max(0, curves.Count - assignments.Count);
+            result.LabelsMatched = matched.Count;
 
-            ContourElevationResolver.Resolve(assignments);
+            List<ContourChain> chains = ContourJoiner.Build(
+                curves, maxGap, lateralTolerance, maxAngleDegrees, matched);
+
+            result.ChainsBuilt = chains.Count;
+
+            AssignLabels(chains, matched);
+
+            foreach (ContourChain chain in chains)
+            {
+                if (chain.HasLabel) result.ChainsLabeled++;
+                else result.ChainsUnlabeled++;
+            }
+
+            result.ChainsWithDifferentLabels = CountChainsWithDifferentLabels(chains, matched);
+
+            ContourElevationResolver.Resolve(chains);
 
             ObjectId targetLayerId = EnsureLayer(transaction, database, TargetLayerName, 3);
-            var blockTableRecord =
-                (BlockTableRecord)transaction.GetObject(modelSpaceId, OpenMode.ForWrite);
+            var modelSpace = (BlockTableRecord)transaction.GetObject(modelSpaceId, OpenMode.ForWrite);
 
-            foreach (ContourAssignment assignment in assignments)
+            foreach (ContourChain chain in chains)
             {
-                if (!assignment.Elevation.HasValue)
+                if (!chain.IsResolved)
                 {
                     result.Unresolved++;
                     continue;
                 }
 
-                var source = transaction.GetObject(assignment.CurveId, OpenMode.ForRead) as Curve;
-                if (source == null) continue;
+                double elevation = chain.Elevation.Value;
 
-                double elevation = assignment.Elevation.Value;
-
-                if (!TryCreateLiftedPolyline(
-                        transaction, source, elevation, targetLayerId, blockTableRecord))
+                foreach (ObjectId segmentId in chain.SegmentIds)
                 {
-                    continue;
+                    var source = transaction.GetObject(segmentId, OpenMode.ForRead) as Curve;
+                    if (source == null) continue;
+
+                    if (!TryCreateLiftedPolyline(
+                            transaction, source, elevation, targetLayerId, modelSpace))
+                    {
+                        continue;
+                    }
+
+                    result.ContoursCreated++;
+
+                    if (elevation < result.MinElevation) result.MinElevation = elevation;
+                    if (elevation > result.MaxElevation) result.MaxElevation = elevation;
                 }
-
-                result.ContoursCreated++;
-
-                if (elevation < result.MinElevation) result.MinElevation = elevation;
-                if (elevation > result.MaxElevation) result.MaxElevation = elevation;
             }
 
             if (result.ContoursCreated == 0)
@@ -119,7 +164,80 @@ namespace CivilGPT.CAD.Contours
         }
 
         /// <summary>
-        /// Собрать кривые и подписи с указанного слоя.
+        /// Раздать подписи цепочкам: полная подпись приоритетнее сокращённой.
+        /// </summary>
+        private static void AssignLabels(
+            IEnumerable<ContourChain> chains,
+            IDictionary<ObjectId, ContourLabel> matched)
+        {
+            foreach (ContourChain chain in chains)
+            {
+                ContourLabel chosen = null;
+
+                foreach (ObjectId segmentId in chain.SegmentIds)
+                {
+                    ContourLabel label;
+                    if (!matched.TryGetValue(segmentId, out label)) continue;
+
+                    if (chosen == null)
+                    {
+                        chosen = label;
+                        continue;
+                    }
+
+                    // Полная отметка информативнее сокращённой.
+                    if (label.IsFull && !chosen.IsFull) chosen = label;
+                }
+
+                chain.Label = chosen;
+                chain.Anchor = chosen != null ? chosen.Position : Point3d.Origin;
+            }
+        }
+
+        /// <summary>
+        /// Сколько цепочек содержит подписи с разными значениями.
+        /// Большое число — сигнал, что допуск сшивки слишком велик
+        /// и в одну цепочку склеились разные горизонтали.
+        /// </summary>
+        private static int CountChainsWithDifferentLabels(
+            IEnumerable<ContourChain> chains,
+            IDictionary<ObjectId, ContourLabel> matched)
+        {
+            int count = 0;
+
+            foreach (ContourChain chain in chains)
+            {
+                if (chain.SegmentIds.Count < 2) continue;
+
+                double first = double.NaN;
+                bool different = false;
+
+                foreach (ObjectId segmentId in chain.SegmentIds)
+                {
+                    ContourLabel label;
+                    if (!matched.TryGetValue(segmentId, out label)) continue;
+
+                    if (double.IsNaN(first))
+                    {
+                        first = label.Value;
+                        continue;
+                    }
+
+                    if (Math.Abs(label.Value - first) > 1e-6)
+                    {
+                        different = true;
+                        break;
+                    }
+                }
+
+                if (different) count++;
+            }
+
+            return count;
+        }
+
+        /// <summary>
+        /// Собрать горизонтали и подписи с указанного слоя.
         /// </summary>
         public static void Collect(
             Transaction transaction,
@@ -150,51 +268,13 @@ namespace CivilGPT.CAD.Contours
                     continue;
                 }
 
-                ContourLabel label = ReadLabel(entity);
+                ContourLabel label = ContourLabelReader.TryRead(transaction, entity);
                 if (label != null) labels.Add(label);
             }
         }
 
-        private static ContourLabel ReadLabel(Entity entity)
-        {
-            string rawText = null;
-            Point3d position = Point3d.Origin;
-            double height = 0.0;
-
-            var text = entity as DBText;
-            if (text != null)
-            {
-                rawText = text.TextString;
-                position = text.Position;
-                height = text.Height;
-            }
-            else
-            {
-                var mText = entity as MText;
-                if (mText == null) return null;
-
-                rawText = mText.Text;
-                position = mText.Location;
-                height = mText.TextHeight;
-            }
-
-            double value;
-            bool isFull;
-            if (!ContourTextParser.TryParse(rawText, out value, out isFull)) return null;
-
-            return new ContourLabel
-            {
-                TextId = entity.ObjectId,
-                Position = position,
-                RawText = rawText,
-                Value = value,
-                IsFull = isFull,
-                Height = height
-            };
-        }
-
         /// <summary>
-        /// Создать копию линии в виде полилинии на нужной отметке.
+        /// Создать копию отрезка в виде полилинии на нужной отметке.
         /// </summary>
         private static bool TryCreateLiftedPolyline(
             Transaction transaction,

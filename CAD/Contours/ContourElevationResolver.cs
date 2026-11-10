@@ -5,54 +5,49 @@ using Autodesk.AutoCAD.Geometry;
 namespace CivilGPT.CAD.Contours
 {
     /// <summary>
-    /// Восстановление абсолютных отметок по подписям.
-    /// Полные отметки задают «якоря», сокращённые разворачиваются от ближайшего якоря.
+    /// Восстановление абсолютных отметок горизонталей.
+    /// Полные подписи (205.00, 206) — якоря, сокращённые (60, 70, 90)
+    /// разворачиваются от ближайшего якоря: 60 при опоре 204.59 даёт 204.60.
     /// </summary>
     public static class ContourElevationResolver
     {
-        public static void Resolve(IList<ContourAssignment> assignments)
+        public static void Resolve(IList<ContourChain> chains)
         {
-            if (assignments == null || assignments.Count == 0) return;
+            if (chains == null || chains.Count == 0) return;
 
-            var anchors = new List<ContourAssignment>();
+            var anchors = new List<ContourChain>();
 
-            foreach (ContourAssignment assignment in assignments)
+            foreach (ContourChain chain in chains)
             {
-                if (!assignment.IsFull) continue;
+                if (chain.Label == null || !chain.Label.IsFull) continue;
 
-                assignment.Elevation = assignment.RawValue;
-                anchors.Add(assignment);
+                chain.Elevation = chain.Label.Value;
+                anchors.Add(chain);
             }
 
-            if (anchors.Count == 0)
-            {
-                // Ни одной полной отметки — разворачивать сокращённые не от чего.
-                return;
-            }
+            if (anchors.Count == 0) return;
 
-            foreach (ContourAssignment assignment in assignments)
+            foreach (ContourChain chain in chains)
             {
-                if (assignment.IsFull) continue;
+                if (chain.Label == null || chain.Label.IsFull) continue;
 
-                ContourAssignment anchor = FindNearest(anchors, assignment.Position);
+                ContourChain anchor = FindNearest(anchors, chain.Anchor);
                 if (anchor == null || !anchor.Elevation.HasValue) continue;
 
-                assignment.Elevation = ContourTextParser.ExpandShort(
-                    assignment.RawValue, anchor.Elevation.Value);
+                chain.Elevation = ContourTextParser.ExpandShort(
+                    chain.Label.Value, anchor.Elevation.Value);
             }
         }
 
-        private static ContourAssignment FindNearest(
-            IReadOnlyList<ContourAssignment> anchors,
-            Point3d position)
+        private static ContourChain FindNearest(IReadOnlyList<ContourChain> anchors, Point3d position)
         {
-            ContourAssignment best = null;
+            ContourChain best = null;
             double bestDistance = double.MaxValue;
 
-            foreach (ContourAssignment anchor in anchors)
+            foreach (ContourChain anchor in anchors)
             {
-                double dx = anchor.Position.X - position.X;
-                double dy = anchor.Position.Y - position.Y;
+                double dx = anchor.Anchor.X - position.X;
+                double dy = anchor.Anchor.Y - position.Y;
                 double distance = Math.Sqrt(dx * dx + dy * dy);
 
                 if (distance < bestDistance)

@@ -42,4 +42,12 @@
     </None>
   </ItemGroup>
 
+  <!-- TestDataset — тестовые чертежи и вспомогательные утилиты, в плагин не входят. -->
+  <ItemGroup>
+    <Compile Remove="TestDataset\**" />
+    <None Remove="TestDataset\**" />
+    <Page Remove="TestDataset\**" />
+    <EmbeddedResource Remove="TestDataset\**" />
+  </ItemGroup>
+
 </Project>

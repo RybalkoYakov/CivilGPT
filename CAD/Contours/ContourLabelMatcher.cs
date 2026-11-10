@@ -6,53 +6,30 @@ using Autodesk.AutoCAD.Geometry;
 namespace CivilGPT.CAD.Contours
 {
     /// <summary>
-    /// Связь «горизонталь — её подпись».
-    /// Подпись в топографических чертежах обычно стоит в разрыве линии,
-    /// поэтому критерий — минимальное плановое расстояние от текста до кривой.
+    /// Привязка подписи к ближайшему отрезку горизонтали.
+    /// Подпись в топографических чертежах ставится в разрыве линии,
+    /// поэтому критерий — минимальное плановое расстояние до кривой.
     /// </summary>
-    public sealed class ContourAssignment
-    {
-        public ObjectId CurveId { get; set; }
-
-        public ObjectId TextId { get; set; }
-
-        public Point3d Position { get; set; }
-
-        public double RawValue { get; set; }
-
-        public bool IsFull { get; set; }
-
-        /// <summary>Восстановленная абсолютная отметка, null если восстановить не удалось.</summary>
-        public double? Elevation { get; set; }
-    }
-
     public static class ContourLabelMatcher
     {
-        /// <summary>
-        /// Для каждой горизонтали найти ближайшую подпись в пределах допуска.
-        /// </summary>
-        /// <param name="curves">Кривые-горизонтали.</param>
-        /// <param name="labels">Разобранные подписи.</param>
-        /// <param name="tolerance">Максимальное плановое расстояние текст↔линия.</param>
-        /// <param name="conflicts">Количество случаев, когда на линию претендовали несколько подписей.</param>
-        public static List<ContourAssignment> Match(
+        public static Dictionary<ObjectId, ContourLabel> Match(
             IReadOnlyList<Curve> curves,
             IReadOnlyList<ContourLabel> labels,
             double tolerance,
             out int conflicts)
         {
             conflicts = 0;
-            var assignments = new List<ContourAssignment>();
+            var result = new Dictionary<ObjectId, ContourLabel>();
 
-            if (curves == null || labels == null || labels.Count == 0) return assignments;
+            if (curves == null || labels == null || labels.Count == 0 || curves.Count == 0)
+            {
+                return result;
+            }
 
-            // Для каждой линии — лучшая (самая близкая) подпись
-            var bestByCurve = new Dictionary<ObjectId, int>();
             var bestDistance = new Dictionary<ObjectId, double>();
 
-            for (int i = 0; i < labels.Count; i++)
+            foreach (ContourLabel label in labels)
             {
-                ContourLabel label = labels[i];
                 double effectiveTolerance = Math.Max(tolerance, label.Height * 5.0);
 
                 ObjectId nearestCurve = ObjectId.Null;
@@ -68,39 +45,26 @@ namespace CivilGPT.CAD.Contours
                     }
                 }
 
-                if (nearestCurve.IsNull || nearestDistance > effectiveTolerance)
-                {
-                    continue;
-                }
+                if (nearestCurve.IsNull || nearestDistance > effectiveTolerance) continue;
 
-                int existing;
-                if (bestByCurve.TryGetValue(nearestCurve, out existing))
+                ContourLabel existing;
+                if (result.TryGetValue(nearestCurve, out existing))
                 {
                     conflicts++;
 
-                    // Оставляем подпись, которая стоит ближе к линии
-                    if (nearestDistance >= bestDistance[nearestCurve]) continue;
+                    // Оставляем более информативную подпись (полную), затем — ближайшую.
+                    bool existingIsFull = existing.IsFull;
+                    bool newIsFull = label.IsFull;
+
+                    if (existingIsFull && !newIsFull) continue;
+                    if (existingIsFull == newIsFull && nearestDistance >= bestDistance[nearestCurve]) continue;
                 }
 
-                bestByCurve[nearestCurve] = i;
+                result[nearestCurve] = label;
                 bestDistance[nearestCurve] = nearestDistance;
             }
 
-            foreach (KeyValuePair<ObjectId, int> pair in bestByCurve)
-            {
-                ContourLabel label = labels[pair.Value];
-
-                assignments.Add(new ContourAssignment
-                {
-                    CurveId = pair.Key,
-                    TextId = label.TextId,
-                    Position = label.Position,
-                    RawValue = label.Value,
-                    IsFull = label.IsFull
-                });
-            }
-
-            return assignments;
+            return result;
         }
 
         private static double PlanDistanceToCurve(Curve curve, Point3d point)
@@ -108,8 +72,10 @@ namespace CivilGPT.CAD.Contours
             try
             {
                 Point3d closest = curve.GetClosestPointTo(point, false);
+
                 double dx = closest.X - point.X;
                 double dy = closest.Y - point.Y;
+
                 return Math.Sqrt(dx * dx + dy * dy);
             }
             catch (System.Exception)

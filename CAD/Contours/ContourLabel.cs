@@ -5,12 +5,15 @@ namespace CivilGPT.CAD.Contours
 {
     /// <summary>
     /// Разобранная подпись у горизонтали.
+    /// В исходных чертежах подпись — это не текст, а вставка блока с атрибутом
+    /// (например, блок с тегом «50» и значением «60»), поэтому SourceId указывает
+    /// на объект-носитель: текст, мультивыноску или вставку блока.
     /// </summary>
     public sealed class ContourLabel
     {
-        public ObjectId TextId { get; set; }
+        public ObjectId SourceId { get; set; }
 
-        /// <summary>Точка вставки текста.</summary>
+        /// <summary>Точка вставки подписи.</summary>
         public Point3d Position { get; set; }
 
         /// <summary>Исходная строка подписи.</summary>
