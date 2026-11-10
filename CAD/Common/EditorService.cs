@@ -75,6 +75,17 @@ namespace CivilGPT.CAD.Common
         }
 
         /// <summary>
+        /// Выбор одного объекта. Возвращает ObjectId.Null, если выбор отменён.
+        /// </summary>
+        public ObjectId GetEntity(string message, bool allowNone = true)
+        {
+            var options = new PromptEntityOptions(message) { AllowNone = allowNone };
+            PromptEntityResult result = _editor.GetEntity(options);
+
+            return result.Status == PromptStatus.OK ? result.ObjectId : ObjectId.Null;
+        }
+
+        /// <summary>
         /// Запрос подтверждения (Y/N). Enter не подтверждает операцию.
         /// Список ключевых слов AutoCAD выводит сам, дублировать его в тексте не нужно.
         /// </summary>

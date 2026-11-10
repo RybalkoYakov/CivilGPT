@@ -2,23 +2,23 @@ using System;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Runtime;
+using Autodesk.Civil.DatabaseServices;
 using CivilGPT.CAD.Common;
+using CivilGPT.CAD.Contours;
 using CivilGPT.CAD.Surfaces;
 using CivilGPT.Models;
 
 namespace CivilGPT.Commands
 {
     /// <summary>
-    /// Команды построения поверхностей Civil 3D.
+    /// Вторая команда: сборка TIN-поверхности.
+    /// Создаёт поверхность по подготовленным горизонталям (или дополняет существующую),
+    /// добавляет характерные линии как брейклайны и внешнюю границу участка.
     /// </summary>
     public class SurfaceCommands
     {
-        /// <summary>
-        /// Построение TIN-поверхности по горизонталям и отметкам.
-        /// Enter на запросе выбора — использовать всё пространство модели.
-        /// </summary>
-        [CommandMethod("TINSURFACEFROMCONTOURS")]
-        public void CreateTinFromContours()
+        [CommandMethod("CGTINSURFACE")]
+        public void BuildSurface()
         {
             EditorService editor = EditorService.FromActiveDocument();
 
@@ -28,95 +28,194 @@ namespace CivilGPT.Commands
                 return;
             }
 
-            var options = new TinSurfaceOptions
-            {
-                SurfaceName = TinSurfaceOptions.SuggestSurfaceName()
-            };
+            Document document = CadApplication.ActiveDocument;
+            var documentService = new DocumentService(document);
 
-            string surfaceName = editor.GetString($"\nИмя поверхности <{options.SurfaceName}>");
-            if (surfaceName == null)
+            // 1. Куда добавлять: существующая поверхность или новая
+            ObjectId surfaceId = editor.GetEntity(
+                "\nВыберите поверхность TIN (Enter — построить новую)");
+
+            // 2. Характерные линии
+            ObjectId[] breaklineIds = editor.GetSelection(
+                "\nВыберите характерные линии: бровки, лотки, уступы (Enter — пропустить)");
+
+            // 3. Граница участка
+            ObjectId boundaryId = editor.GetEntity(
+                "\nВыберите замкнутую границу участка (Enter — без границы)");
+
+            string surfaceName = null;
+            if (surfaceId.IsNull)
             {
-                editor.WriteLine("Операция отменена.");
-                return;
+                surfaceName = editor.GetString(
+                    $"\nИмя новой поверхности <{TinSurfaceOptions.SuggestSurfaceName()}>");
+
+                if (surfaceName == null)
+                {
+                    editor.WriteLine("Операция отменена.");
+                    return;
+                }
+
+                if (string.IsNullOrWhiteSpace(surfaceName))
+                {
+                    surfaceName = TinSurfaceOptions.SuggestSurfaceName();
+                }
             }
 
-            if (!string.IsNullOrWhiteSpace(surfaceName))
-            {
-                options.SurfaceName = surfaceName.Trim();
-            }
-
-            ObjectId[] selected = editor.GetSelection(
-                "\nВыберите горизонтали и отметки (Enter — всё пространство модели)");
-
-            bool useModelSpace = selected.Length == 0;
-
-            if (useModelSpace)
+            if (breaklineIds.Length == 0 && boundaryId.IsNull && surfaceId.IsNull)
             {
                 if (!editor.AskConfirmation(
-                        "\nОбъекты не выбраны. Построить поверхность по всему пространству модели?"))
+                        $"\nХарактерные линии и граница не выбраны.\n" +
+                        $"Будет создана поверхность '{surfaceName}' только по горизонталям слоя " +
+                        $"'{ContourLiftService.TargetLayerName}'. Продолжить?"))
                 {
                     editor.WriteLine("Операция отменена.");
                     return;
                 }
             }
 
-            string summary =
-                $"\nПоверхность: '{options.SurfaceName}'\n" +
-                $"Источник: {(useModelSpace ? "всё пространство модели" : $"выбрано объектов: {selected.Length}")}\n" +
-                $"Срединная ордината: {options.MidOrdinateDistance:F3} м, " +
-                $"макс. расстояние: {options.MaximumDistance:F3} м,\n" +
-                $"отсеивание: {options.WeedingDistance:F3} м, " +
-                $"дополнение: {options.SupplementingDistance:F3} м.";
-
-            if (!editor.AskConfirmation(summary))
-            {
-                editor.WriteLine("Операция отменена.");
-                return;
-            }
-
-            Document document = CadApplication.ActiveDocument;
-            var documentService = new DocumentService(document);
-
             try
             {
                 using (document.LockDocument())
                 using (Transaction transaction = document.Database.TransactionManager.StartTransaction())
                 {
-                    SurfaceSourceSet sources = useModelSpace
-                        ? ContourCollector.CollectSpace(transaction, documentService.ModelSpaceId, options)
-                        : ContourCollector.Collect(transaction, selected, options);
+                    TinSurface surface;
+                    int contourCount = 0;
+                    string mode;
 
-                    if (sources.IsEmpty)
+                    if (!surfaceId.IsNull)
                     {
-                        editor.WriteError(
-                            "Не найдено объектов с отметками. Проверьте, что горизонтали имеют высоту (Z), отличную от нуля.");
-                        return;
+                        surface = transaction.GetObject(surfaceId, OpenMode.ForWrite) as TinSurface;
+
+                        if (surface == null)
+                        {
+                            editor.WriteError("Выбранный объект — не TIN-поверхность.");
+                            return;
+                        }
+
+                        mode = "дополнена существующая";
+                    }
+                    else
+                    {
+                        ObjectIdCollection contours = SurfaceDefinitionService.CollectLayerCurves(
+                            transaction,
+                            documentService.ModelSpaceId,
+                            ContourLiftService.TargetLayerName);
+
+                        if (contours.Count == 0)
+                        {
+                            editor.WriteError(
+                                $"В слое '{ContourLiftService.TargetLayerName}' нет горизонталей. " +
+                                "Сначала выполните CGTINCONTOURS.");
+                            return;
+                        }
+
+                        surface = SurfaceDefinitionService.CreateFromContours(
+                            document.Database, transaction, contours, surfaceName);
+
+                        contourCount = contours.Count;
+                        mode = "создана новая";
                     }
 
-                    SurfaceBuildResult result = TinSurfaceBuilder.Build(
-                        document.Database, transaction, sources, options);
+                    // Характерные линии
+                    int breaklineCount = 0;
+                    if (breaklineIds.Length > 0)
+                    {
+                        var breaklineCollection = new ObjectIdCollection();
 
+                        foreach (ObjectId id in breaklineIds)
+                        {
+                            var entity = transaction.GetObject(id, OpenMode.ForRead)
+                                as Autodesk.AutoCAD.DatabaseServices.Entity;
+                            if (entity is Curve)
+                            {
+                                breaklineCollection.Add(id);
+                            }
+                        }
+
+                        breaklineCount = SurfaceDefinitionService.AddBreaklines(surface, breaklineCollection);
+
+                        if (breaklineCount < breaklineIds.Length)
+                        {
+                            editor.WriteLine(
+                                $"Из выбранных объектов кривыми являются {breaklineCount} из {breaklineIds.Length}.");
+                        }
+                    }
+
+                    // Граница участка
+                    bool boundaryAdded = false;
+                    if (!boundaryId.IsNull)
+                    {
+                        var boundaryCollection = new ObjectIdCollection();
+                        boundaryCollection.Add(boundaryId);
+
+                        SurfaceDefinitionService.AddOuterBoundary(surface, boundaryCollection, true);
+                        boundaryAdded = true;
+                    }
+
+                    int vertexCount;
+                    double minElevation;
+                    double maxElevation;
+
+                    SurfaceDefinitionService.RebuildAndMeasure(
+                        surface, out vertexCount, out minElevation, out maxElevation);
+
+                    string surfaceDisplayName = surface.Name;
                     transaction.Commit();
 
-                    editor.WriteLine("--- Поверхность построена ---");
-                    editor.WriteLine(result.ToString());
-
-                    if (result.ZeroElevationCurves > 0)
-                    {
-                        editor.WriteLine(
-                            $"Внимание: горизонталей с нулевой отметкой — {result.ZeroElevationCurves}.");
-                    }
-
-                    if (result.VertexCount == 0)
-                    {
-                        editor.WriteLine(
-                            "Внимание: поверхность не содержит вершин. Проверьте отметки исходных объектов.");
-                    }
+                    Report(editor, mode, surfaceDisplayName, contourCount, breaklineCount,
+                        boundaryAdded, vertexCount, minElevation, maxElevation, breaklineIds.Length);
                 }
             }
             catch (System.Exception ex)
             {
                 editor.WriteError("Не удалось построить поверхность: " + ex.Message);
+            }
+        }
+
+        private static void Report(
+            EditorService editor,
+            string mode,
+            string surfaceName,
+            int contourCount,
+            int breaklineCount,
+            bool boundaryAdded,
+            int vertexCount,
+            double minElevation,
+            double maxElevation,
+            int selectedCount)
+        {
+            editor.WriteLine("--- Сборка поверхности завершена ---");
+            editor.WriteLine($"Поверхность '{surfaceName}' ({mode}).");
+
+            if (contourCount > 0)
+            {
+                editor.WriteLine($"Горизонталей добавлено: {contourCount}");
+            }
+
+            editor.WriteLine(breaklineCount > 0
+                ? $"Характерных линий (брейклайнов) добавлено: {breaklineCount}"
+                : "Характерные линии: не добавлялись.");
+
+            if (selectedCount > 0 && breaklineCount == 0)
+            {
+                editor.WriteLine("Внимание: среди выбранных объектов не оказалось кривых.");
+            }
+
+            editor.WriteLine(boundaryAdded
+                ? "Граница: добавлена внешняя с отсечением."
+                : "Граница: не задавалась.");
+
+            editor.WriteLine($"Вершин в TIN: {vertexCount}");
+
+            if (vertexCount > 0)
+            {
+                editor.WriteLine($"Отметки поверхности: {minElevation:F2}…{maxElevation:F2} м");
+            }
+            else
+            {
+                editor.WriteLine(
+                    "Внимание: поверхность не содержит вершин. Проверьте, что у горизонталей заданы высоты " +
+                    "(CGTINCONTOURS) и что граница не отсекает весь участок.");
             }
         }
     }
