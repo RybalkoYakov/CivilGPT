@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Net.Http;
 using System.Text;
-using System.Text.Json;
 using System.Threading.Tasks;
 using CivilGPT.Configuration;
+using CivilGPT.Infrastructure;
 
 namespace CivilGPT.AI
 {
@@ -35,16 +35,20 @@ namespace CivilGPT.AI
             IReadOnlyList<LlmMessage> history,
             IReadOnlyList<LlmToolDefinition> tools)
         {
-            var payload = new
+            var payload = new Dictionary<string, object>
             {
-                model = _settings.Model,
-                messages = BuildMessages(history),
-                tools = BuildTools(tools),
-                tool_choice = tools != null && tools.Count > 0 ? "auto" : null,
-                temperature = _settings.Temperature
+                ["model"] = _settings.Model,
+                ["messages"] = BuildMessages(history),
+                ["temperature"] = _settings.Temperature
             };
 
-            string json = JsonSerializer.Serialize(payload);
+            if (tools != null && tools.Count > 0)
+            {
+                payload["tools"] = BuildTools(tools);
+                payload["tool_choice"] = "auto";
+            }
+
+            string json = JsonHelper.Serialize(payload);
             string url = _settings.BaseUrl.TrimEnd('/') + "/chat/completions";
 
             using (var request = new HttpRequestMessage(HttpMethod.Post, url))
@@ -65,88 +69,112 @@ namespace CivilGPT.AI
             }
         }
 
-        private static object[] BuildMessages(IReadOnlyList<LlmMessage> history)
+        private static List<object> BuildMessages(IReadOnlyList<LlmMessage> history)
         {
             var messages = new List<object>();
+            if (history == null) return messages;
+
             foreach (LlmMessage message in history)
             {
-                messages.Add(new { role = message.Role, content = message.Content });
+                messages.Add(new Dictionary<string, object>
+                {
+                    ["role"] = message.Role,
+                    ["content"] = message.Content ?? string.Empty
+                });
             }
-            return messages.ToArray();
+
+            return messages;
         }
 
-        private static object[] BuildTools(IReadOnlyList<LlmToolDefinition> tools)
+        private static List<object> BuildTools(IReadOnlyList<LlmToolDefinition> tools)
         {
-            if (tools == null || tools.Count == 0) return null;
-
             var list = new List<object>();
+
             foreach (LlmToolDefinition tool in tools)
             {
-                list.Add(new
+                list.Add(new Dictionary<string, object>
                 {
-                    type = "function",
-                    function = new
+                    ["type"] = "function",
+                    ["function"] = new Dictionary<string, object>
                     {
-                        name = tool.Name,
-                        description = tool.Description,
-                        parameters = tool.ParametersSchema
+                        ["name"] = tool.Name,
+                        ["description"] = tool.Description,
+                        ["parameters"] = tool.ParametersSchema
                     }
                 });
             }
-            return list.ToArray();
+
+            return list;
         }
 
         private static LlmResponse ParseResponse(string json)
         {
-            using (JsonDocument document = JsonDocument.Parse(json))
+            IDictionary<string, object> root = JsonHelper.AsDictionary(JsonHelper.Deserialize(json));
+
+            if (root == null)
             {
-                JsonElement root = document.RootElement;
+                throw new InvalidOperationException("Пустой ответ LLM.");
+            }
 
-                if (!root.TryGetProperty("choices", out JsonElement choices)
-                    || choices.ValueKind != JsonValueKind.Array
-                    || choices.GetArrayLength() == 0)
+            object choicesRaw;
+            if (!root.TryGetValue("choices", out choicesRaw))
+            {
+                throw new InvalidOperationException("Ответ LLM не содержит поля 'choices'.");
+            }
+
+            IList<object> choices = JsonHelper.AsArray(choicesRaw);
+            if (choices == null || choices.Count == 0)
+            {
+                throw new InvalidOperationException("Ответ LLM не содержит вариантов ответа.");
+            }
+
+            IDictionary<string, object> message =
+                GetDictionary(JsonHelper.AsDictionary(choices[0]), "message");
+
+            if (message == null)
+            {
+                throw new InvalidOperationException("Ответ LLM не содержит поля 'message'.");
+            }
+
+            object toolCallsRaw;
+            if (message.TryGetValue("tool_calls", out toolCallsRaw))
+            {
+                IList<object> toolCalls = JsonHelper.AsArray(toolCallsRaw);
+
+                if (toolCalls != null && toolCalls.Count > 0)
                 {
-                    throw new InvalidOperationException("Ответ LLM не содержит поля 'choices'.");
-                }
+                    IDictionary<string, object> function =
+                        GetDictionary(JsonHelper.AsDictionary(toolCalls[0]), "function");
 
-                JsonElement message = choices[0].GetProperty("message");
+                    string name = JsonHelper.GetString(function, "name");
+                    string argumentsJson = JsonHelper.GetString(function, "arguments", "{}");
 
-                if (message.TryGetProperty("tool_calls", out JsonElement toolCalls)
-                    && toolCalls.ValueKind == JsonValueKind.Array
-                    && toolCalls.GetArrayLength() > 0)
-                {
-                    JsonElement function = toolCalls[0].GetProperty("function");
-
-                    string argumentsJson = "{}";
-                    if (function.TryGetProperty("arguments", out JsonElement arguments)
-                        && arguments.ValueKind == JsonValueKind.String)
-                    {
-                        argumentsJson = arguments.GetString() ?? "{}";
-                    }
-
-                    JsonElement parsedArguments;
-                    using (JsonDocument argumentDocument =
-                        JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson))
-                    {
-                        parsedArguments = argumentDocument.RootElement.Clone();
-                    }
+                    IDictionary<string, object> arguments =
+                        JsonHelper.AsDictionary(JsonHelper.Deserialize(argumentsJson));
 
                     return new LlmResponse
                     {
-                        ToolName = function.GetProperty("name").GetString(),
-                        ToolArgs = parsedArguments
+                        ToolName = name,
+                        ToolArgs = arguments ?? new Dictionary<string, object>()
                     };
                 }
-
-                string text = "";
-                if (message.TryGetProperty("content", out JsonElement content)
-                    && content.ValueKind == JsonValueKind.String)
-                {
-                    text = content.GetString() ?? "";
-                }
-
-                return new LlmResponse { Text = text };
             }
+
+            return new LlmResponse
+            {
+                Text = JsonHelper.GetString(message, "content", string.Empty)
+            };
+        }
+
+        private static IDictionary<string, object> GetDictionary(
+            IDictionary<string, object> source,
+            string key)
+        {
+            object value;
+            if (source == null || key == null) return null;
+            if (!source.TryGetValue(key, out value)) return null;
+
+            return JsonHelper.AsDictionary(value);
         }
 
         private static string Truncate(string value, int max)

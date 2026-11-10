@@ -14,6 +14,9 @@
     <UseWindowsForms>false</UseWindowsForms>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <DebugType>portable</DebugType>
+    <!-- Исходники в UTF-8 без BOM: без этого компилятор читает их в системной ANSI-кодировке
+         и кириллица в строках превращается в кракозябры. -->
+    <CodePage>65001</CodePage>
     <NoWarn>$(NoWarn);MSB3277</NoWarn>
   </PropertyGroup>
 
@@ -25,14 +28,11 @@
     <PackageReference Include="Civil3D2022.Base" Version="1.0.0" ExcludeAssets="runtime" />
   </ItemGroup>
 
-  <!-- Инфраструктура: DI, конфигурация, JSON -->
+  <!-- Только сборки .NET Framework: у плагина не должно быть сторонних
+       NuGet-зависимостей, иначе срабатывает проблема привязки версий,
+       которую в процессе AutoCAD невозможно исправить binding redirect.
+       JSON реализован самостоятельно (Infrastructure/JsonHelper.cs). -->
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />
-    <PackageReference Include="Microsoft.Extensions.Configuration" Version="8.0.0" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.0.0" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="8.0.0" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="8.0.0" />
-    <PackageReference Include="System.Text.Json" Version="8.0.5" />
     <Reference Include="System.Net.Http" />
   </ItemGroup>
 

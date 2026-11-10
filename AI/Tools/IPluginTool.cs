@@ -1,4 +1,4 @@
-using System.Text.Json;
+using System.Collections.Generic;
 
 namespace CivilGPT.AI.Tools
 {
@@ -14,13 +14,13 @@ namespace CivilGPT.AI.Tools
         /// <summary>Описание для LLM: что делает инструмент и когда его вызывать.</summary>
         string Description { get; }
 
-        /// <summary>JSON-схема аргументов (для function calling).</summary>
-        JsonElement ParametersSchema { get; }
+        /// <summary>JSON-схема аргументов (для function calling), в виде строки.</summary>
+        string ParametersSchema { get; }
 
         /// <summary>Опасная операция (изменяет чертёж) — требует подтверждения пользователя.</summary>
         bool RequiresConfirmation { get; }
 
         /// <summary>Выполнить инструмент. Вызывается в главном потоке AutoCAD.</summary>
-        ToolResult Execute(JsonElement args);
+        ToolResult Execute(IDictionary<string, object> args);
     }
 }

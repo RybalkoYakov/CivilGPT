@@ -1,11 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.Text.Json;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.Civil.ApplicationServices;
 using CivilGPT.CAD.Cogo;
 using CivilGPT.CAD.Common;
+using CivilGPT.Infrastructure;
 using CivilGPT.Models;
 
 namespace CivilGPT.AI.Tools
@@ -15,17 +15,7 @@ namespace CivilGPT.AI.Tools
     /// </summary>
     public class RandomizePointElevationTool : IPluginTool
     {
-        public string Name => "randomize_point_elevation";
-
-        public string Description =>
-            "Применяет случайное смещение по высоте (Z) к точкам COGO. " +
-            "По умолчанию работает с текущим выделением в AutoCAD. " +
-            "Можно явно указать номера точек через параметр 'pointNumbers'. " +
-            "Используется для имитации погрешности измерений относительно проектных значений.";
-
-        public bool RequiresConfirmation => true;
-
-        public JsonElement ParametersSchema => JsonDocument.Parse(@"
+        private const string SchemaJson = @"
         {
           ""type"": ""object"",
           ""properties"": {
@@ -44,9 +34,21 @@ namespace CivilGPT.AI.Tools
             }
           },
           ""required"": [""minOffset"", ""maxOffset""]
-        }").RootElement;
+        }";
 
-        public ToolResult Execute(JsonElement args)
+        public string Name => "randomize_point_elevation";
+
+        public string Description =>
+            "Применяет случайное смещение по высоте (Z) к точкам COGO. " +
+            "По умолчанию работает с текущим выделением в AutoCAD. " +
+            "Можно явно указать номера точек через параметр 'pointNumbers'. " +
+            "Используется для имитации погрешности измерений относительно проектных значений.";
+
+        public bool RequiresConfirmation => true;
+
+        public string ParametersSchema => SchemaJson;
+
+        public ToolResult Execute(IDictionary<string, object> args)
         {
             if (!CadApplication.HasActiveDocument)
             {
@@ -60,13 +62,13 @@ namespace CivilGPT.AI.Tools
             }
 
             double minOffset;
-            if (!ToolArguments.TryGetDouble(args, "minOffset", out minOffset))
+            if (!JsonHelper.TryGetDouble(args, "minOffset", out minOffset))
             {
                 return ToolResult.Fail("Не указан или некорректен параметр 'minOffset'.");
             }
 
             double maxOffset;
-            if (!ToolArguments.TryGetDouble(args, "maxOffset", out maxOffset))
+            if (!JsonHelper.TryGetDouble(args, "maxOffset", out maxOffset))
             {
                 return ToolResult.Fail("Не указан или некорректен параметр 'maxOffset'.");
             }
@@ -93,7 +95,7 @@ namespace CivilGPT.AI.Tools
                 {
                     pointIds = ResolveTargetPoints(transaction, civilDocument, args);
                 }
-                catch (Exception ex)
+                catch (InvalidOperationException ex)
                 {
                     return ToolResult.Fail(ex.Message);
                 }
@@ -133,11 +135,17 @@ namespace CivilGPT.AI.Tools
         private static List<ObjectId> ResolveTargetPoints(
             Transaction transaction,
             CivilDocument civilDocument,
-            JsonElement args)
+            IDictionary<string, object> args)
         {
-            List<uint> numbers;
+            List<uint> numbers = JsonHelper.GetUIntList(args, "pointNumbers");
 
-            if (ToolArguments.TryGetUIntList(args, "pointNumbers", out numbers))
+            if (numbers == null)
+            {
+                throw new InvalidOperationException(
+                    "Номер точки должен быть целым положительным числом.");
+            }
+
+            if (numbers.Count > 0)
             {
                 List<ObjectId> found = CogoPointSelector.ByNumbers(transaction, civilDocument, numbers);
 

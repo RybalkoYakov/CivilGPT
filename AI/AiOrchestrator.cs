@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.Json;
 using System.Threading.Tasks;
 using CivilGPT.AI.Tools;
 using CivilGPT.CAD.Common;
+using CivilGPT.Infrastructure;
 
 namespace CivilGPT.AI
 {
@@ -54,7 +54,7 @@ namespace CivilGPT.AI
                 {
                     Name = t.Name,
                     Description = t.Description,
-                    ParametersSchema = t.ParametersSchema
+                    ParametersSchema = JsonHelper.Deserialize(t.ParametersSchema)
                 })
                 .ToList();
 
@@ -65,7 +65,7 @@ namespace CivilGPT.AI
                 // не на потоке UI AutoCAD, иначе CadDispatcher ниже приведёт к взаимной блокировке.
                 response = await _llm.SendAsync(_history, toolDefinitions).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (System.Exception ex)
             {
                 return "Ошибка обращения к ИИ: " + ex.Message;
             }
@@ -85,16 +85,15 @@ namespace CivilGPT.AI
                 return notFound;
             }
 
+            IDictionary<string, object> arguments =
+                response.ToolArgs ?? new Dictionary<string, object>();
+
             ToolResult result;
             try
             {
-                JsonElement args = response.ToolArgs.ValueKind == JsonValueKind.Undefined
-                    ? default(JsonElement)
-                    : response.ToolArgs;
-
-                result = CadDispatcher.Execute(() => tool.Execute(args));
+                result = CadDispatcher.Execute(() => tool.Execute(arguments));
             }
-            catch (Exception ex)
+            catch (System.Exception ex)
             {
                 result = ToolResult.Fail("Ошибка выполнения инструмента: " + ex.Message);
             }
@@ -109,14 +108,15 @@ namespace CivilGPT.AI
                     $"Результат выполнения инструмента '{tool.Name}': {result.Message} " +
                     "Сформулируй короткий итог для пользователя."));
 
-                LlmResponse summary = await _llm.SendAsync(_history, new List<LlmToolDefinition>())
+                LlmResponse summary = await _llm
+                    .SendAsync(_history, new List<LlmToolDefinition>())
                     .ConfigureAwait(false);
 
                 string text = string.IsNullOrWhiteSpace(summary?.Text) ? result.Message : summary.Text;
                 _history.Add(LlmMessage.Assistant(text));
                 return text;
             }
-            catch (Exception)
+            catch (System.Exception)
             {
                 // ИИ недоступен — возвращаем машинный результат, операция уже выполнена.
                 _history.Add(LlmMessage.Assistant(result.Message));

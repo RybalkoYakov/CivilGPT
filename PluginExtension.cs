@@ -1,21 +1,18 @@
-﻿using System;
+using System;
 using Autodesk.AutoCAD.Runtime;
 using CivilGPT.AI;
 using CivilGPT.CAD.Common;
 using CivilGPT.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 
 [assembly: ExtensionApplication(typeof(CivilGPT.PluginExtension))]
 
 namespace CivilGPT
 {
     /// <summary>
-    /// РўРѕС‡РєР° РІС…РѕРґР° РїР»Р°РіРёРЅР°: РІС‹Р·С‹РІР°РµС‚СЃСЏ AutoCAD РїСЂРё Р·Р°РіСЂСѓР·РєРµ СЃР±РѕСЂРєРё С‡РµСЂРµР· NETLOAD.
+    /// Точка входа плагина: вызывается AutoCAD при загрузке сборки через NETLOAD.
     /// </summary>
     public class PluginExtension : IExtensionApplication
     {
-        public static ServiceProvider Services { get; private set; }
-
         public static PluginSettings Settings { get; private set; }
 
         public static AiOrchestrator Orchestrator { get; private set; }
@@ -24,8 +21,8 @@ namespace CivilGPT
 
         public void Initialize()
         {
-            // РСЃРєР»СЋС‡РµРЅРёРµ РІ Initialize РјРѕР¶РµС‚ СѓСЂРѕРЅРёС‚СЊ AutoCAD,
-            // РїРѕСЌС‚РѕРјСѓ РІРµСЃСЊ РєРѕРґ РёРЅРёС†РёР°Р»РёР·Р°С†РёРё РёР·РѕР»РёСЂРѕРІР°РЅ.
+            // Исключение в Initialize может уронить AutoCAD,
+            // поэтому весь код инициализации изолирован.
             try
             {
                 InitializeCore();
@@ -33,22 +30,12 @@ namespace CivilGPT
             catch (System.Exception ex)
             {
                 CadApplication.WriteMessage(
-                    "\n[CivilGPT] РћС€РёР±РєР° РёРЅРёС†РёР°Р»РёР·Р°С†РёРё: " + ex.Message);
+                    "\n[CivilGPT] Ошибка инициализации: " + ex.Message);
             }
         }
 
         public void Terminate()
         {
-            try
-            {
-                Services?.Dispose();
-            }
-            catch (System.Exception)
-            {
-                // РџРѕРґР°РІР»СЏРµРј РѕС€РёР±РєРё РѕСЃРІРѕР±РѕР¶РґРµРЅРёСЏ РїСЂРё РІС‹РіСЂСѓР·РєРµ РїР»Р°РіРёРЅР°.
-            }
-
-            Services = null;
             Orchestrator = null;
             Tools = null;
         }
@@ -56,49 +43,34 @@ namespace CivilGPT
         private static void InitializeCore()
         {
             Settings = SettingsLoader.Load();
-
-            var services = new ServiceCollection();
-
-            services.AddSingleton(Settings);
-            services.AddSingleton(Settings.Ai.DeepSeek);
-            services.AddSingleton<ToolRegistry>();
-            services.AddSingleton<AiOrchestrator>();
+            Tools = new ToolRegistry();
 
             bool hasApiKey = !string.IsNullOrWhiteSpace(Settings.Ai.DeepSeek.ApiKey);
 
-            if (hasApiKey)
-            {
-                services.AddSingleton<ILlmClient, DeepSeekLlmClient>();
-            }
-            else
-            {
-                services.AddSingleton<ILlmClient, StubLlmClient>();
-            }
+            ILlmClient llm = hasApiKey
+                ? (ILlmClient)new DeepSeekLlmClient(Settings.Ai.DeepSeek)
+                : new StubLlmClient();
 
-            Services = services.BuildServiceProvider();
-
-            Orchestrator = Services.GetRequiredService<AiOrchestrator>();
-            Tools = Services.GetRequiredService<ToolRegistry>();
+            Orchestrator = new AiOrchestrator(llm, Tools);
 
             CadApplication.WriteMessage(
-                $"\n[CivilGPT] РџР»Р°РіРёРЅ Р·Р°РіСЂСѓР¶РµРЅ. РРЅСЃС‚СЂСѓРјРµРЅС‚РѕРІ РІ СЂРµРµСЃС‚СЂРµ: {Tools.All.Count}.");
+                $"\n[CivilGPT] Плагин загружен. Инструментов в реестре: {Tools.All.Count}.");
 
             if (hasApiKey)
             {
                 CadApplication.WriteMessage(
-                    $"\n[CivilGPT] РњРѕРґРµР»СЊ: {Settings.Ai.DeepSeek.Model} ({Settings.Ai.DeepSeek.BaseUrl}).");
+                    $"\n[CivilGPT] Модель: {Settings.Ai.DeepSeek.Model} ({Settings.Ai.DeepSeek.BaseUrl}).");
             }
             else
             {
                 CadApplication.WriteMessage(
-                    "\n[CivilGPT] РљР»СЋС‡ API РЅРµ Р·Р°РґР°РЅ вЂ” РґРѕСЃС‚СѓРїРЅС‹ С‚РѕР»СЊРєРѕ РєРѕРјР°РЅРґС‹ AutoCAD. " +
-                    "РЈРєР°Р¶РёС‚Рµ CIVILGPT_Ai__DeepSeek__ApiKey РёР»Рё DEEPSEEK_API_KEY.");
+                    "\n[CivilGPT] Ключ API не задан — доступны только команды AutoCAD. " +
+                    "Укажите CIVILGPT_Ai__DeepSeek__ApiKey или DEEPSEEK_API_KEY.");
             }
 
             CadApplication.WriteMessage(
-                "\n[CivilGPT] РљРѕРјР°РЅРґС‹: CIVILGPT, TINSURFACEFROMCONTOURS, RANDOMIZEPOINTZ, " +
+                "\n[CivilGPT] Команды: CIVILGPT, TINSURFACEFROMCONTOURS, RANDOMIZEPOINTZ, " +
                 "RANDOMIZEPOINTXY, CREATEDOFFSETPOINTS.");
         }
     }
 }
-

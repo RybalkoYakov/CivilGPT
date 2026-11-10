@@ -1,10 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.Text.Json;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
+using Autodesk.AutoCAD.EditorInput;
 using CivilGPT.CAD.Common;
 using CivilGPT.CAD.Surfaces;
+using CivilGPT.Infrastructure;
 using CivilGPT.Models;
 
 namespace CivilGPT.AI.Tools
@@ -14,17 +15,7 @@ namespace CivilGPT.AI.Tools
     /// </summary>
     public class CreateTinSurfaceTool : IPluginTool
     {
-        public string Name => "create_tin_surface";
-
-        public string Description =>
-            "Создаёт TIN-поверхность Civil 3D по горизонталям (полилинии, линии, сплайны с ненулевой отметкой) " +
-            "и по отметкам (тексты, блоки, точки). " +
-            "Источник данных: 'model' — всё пространство модели, 'selection' — текущее выделение. " +
-            "Используется для получения цифровой модели рельефа из топографического плана.";
-
-        public bool RequiresConfirmation => true;
-
-        public JsonElement ParametersSchema => JsonDocument.Parse(@"
+        private const string SchemaJson = @"
         {
           ""type"": ""object"",
           ""properties"": {
@@ -67,9 +58,21 @@ namespace CivilGPT.AI.Tools
             }
           },
           ""required"": [""source""]
-        }").RootElement;
+        }";
 
-        public ToolResult Execute(JsonElement args)
+        public string Name => "create_tin_surface";
+
+        public string Description =>
+            "Создаёт TIN-поверхность Civil 3D по горизонталям (полилинии, линии, сплайны с ненулевой отметкой) " +
+            "и по отметкам (тексты, блоки, точки). " +
+            "Источник данных: 'model' — всё пространство модели, 'selection' — текущее выделение. " +
+            "Используется для получения цифровой модели рельефа из топографического плана.";
+
+        public bool RequiresConfirmation => true;
+
+        public string ParametersSchema => SchemaJson;
+
+        public ToolResult Execute(IDictionary<string, object> args)
         {
             if (!CadApplication.HasActiveDocument)
             {
@@ -83,14 +86,14 @@ namespace CivilGPT.AI.Tools
 
             var options = new TinSurfaceOptions
             {
-                SurfaceName = ToolArguments.GetString(args, "surfaceName", TinSurfaceOptions.SuggestSurfaceName()),
-                MidOrdinateDistance = ToolArguments.GetDouble(args, "midOrdinateDistance", 0.1),
-                MaximumDistance = ToolArguments.GetDouble(args, "maximumDistance", 10.0),
-                WeedingDistance = ToolArguments.GetDouble(args, "weedingDistance", 0.5),
-                SupplementingDistance = ToolArguments.GetDouble(args, "supplementingDistance", 0.5),
-                UseTextsAsElevationMarks = ToolArguments.GetBool(args, "useTexts", true),
-                UseBlocksAsElevationMarks = ToolArguments.GetBool(args, "useBlocks", true),
-                UsePointsAsElevationMarks = ToolArguments.GetBool(args, "usePoints", true)
+                SurfaceName = JsonHelper.GetString(args, "surfaceName", TinSurfaceOptions.SuggestSurfaceName()),
+                MidOrdinateDistance = JsonHelper.TryGetDouble(args, "midOrdinateDistance", out double mid) ? mid : 0.1,
+                MaximumDistance = JsonHelper.TryGetDouble(args, "maximumDistance", out double max) ? max : 10.0,
+                WeedingDistance = JsonHelper.TryGetDouble(args, "weedingDistance", out double weed) ? weed : 0.5,
+                SupplementingDistance = JsonHelper.TryGetDouble(args, "supplementingDistance", out double supp) ? supp : 0.5,
+                UseTextsAsElevationMarks = JsonHelper.GetBool(args, "useTexts", true),
+                UseBlocksAsElevationMarks = JsonHelper.GetBool(args, "useBlocks", true),
+                UsePointsAsElevationMarks = JsonHelper.GetBool(args, "usePoints", true)
             };
 
             string error;
@@ -100,11 +103,12 @@ namespace CivilGPT.AI.Tools
             }
 
             bool fromSelection = string.Equals(
-                ToolArguments.GetString(args, "source", "model"),
+                JsonHelper.GetString(args, "source", "model"),
                 "selection",
                 StringComparison.OrdinalIgnoreCase);
 
             Document document = CadApplication.ActiveDocument;
+            var documentService = new DocumentService(document);
 
             using (DocumentLock documentLock = document.LockDocument())
             using (Transaction transaction = document.Database.TransactionManager.StartTransaction())
@@ -113,11 +117,7 @@ namespace CivilGPT.AI.Tools
 
                 if (fromSelection)
                 {
-                    ObjectId[] selected = CadApplication.ActiveEditor?.SelectImplied() is { } implied
-                                          && implied.Status == Autodesk.AutoCAD.EditorInput.PromptStatus.OK
-                                          && implied.Value != null
-                        ? implied.Value.GetObjectIds()
-                        : new ObjectId[0];
+                    ObjectId[] selected = GetImpliedSelection();
 
                     if (selected.Length == 0)
                     {
@@ -129,9 +129,7 @@ namespace CivilGPT.AI.Tools
                 else
                 {
                     sources = ContourCollector.CollectSpace(
-                        transaction,
-                        SymbolUtilityServices.GetBlockModelSpaceId(document.Database),
-                        options);
+                        transaction, documentService.ModelSpaceId, options);
                 }
 
                 if (sources.IsEmpty)
@@ -145,7 +143,7 @@ namespace CivilGPT.AI.Tools
                 {
                     result = TinSurfaceBuilder.Build(document.Database, transaction, sources, options);
                 }
-                catch (Exception ex)
+                catch (System.Exception ex)
                 {
                     return ToolResult.Fail("Не удалось построить поверхность: " + ex.Message);
                 }
@@ -166,6 +164,18 @@ namespace CivilGPT.AI.Tools
 
                 return ToolResult.Ok(message);
             }
+        }
+
+        private static ObjectId[] GetImpliedSelection()
+        {
+            var editor = CadApplication.ActiveEditor;
+            if (editor == null) return new ObjectId[0];
+
+            PromptSelectionResult selection = editor.SelectImplied();
+
+            return selection.Status == PromptStatus.OK && selection.Value != null
+                ? selection.Value.GetObjectIds()
+                : new ObjectId[0];
         }
     }
 }

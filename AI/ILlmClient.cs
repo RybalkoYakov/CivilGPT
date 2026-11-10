@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Text.Json;
 using System.Threading.Tasks;
 
 namespace CivilGPT.AI
@@ -42,7 +41,8 @@ namespace CivilGPT.AI
 
         public string Description { get; set; }
 
-        public JsonElement ParametersSchema { get; set; }
+        /// <summary>Схема аргументов, уже разобранная в объект для сериализации.</summary>
+        public object ParametersSchema { get; set; }
     }
 
     public class LlmResponse
@@ -54,7 +54,7 @@ namespace CivilGPT.AI
         public string ToolName { get; set; }
 
         /// <summary>Аргументы вызова инструмента.</summary>
-        public JsonElement ToolArgs { get; set; }
+        public IDictionary<string, object> ToolArgs { get; set; }
 
         public bool HasToolCall => !string.IsNullOrEmpty(ToolName);
     }

@@ -17,8 +17,20 @@
 ## Сборка
 
 ```powershell
+.\build.ps1                 # Release
+.\build.ps1 -Configuration Debug
+```
+
+Скрипт чистит `bin`/`obj`, предупреждает, если запущен Civil 3D, и собирает плагин.
+
+Эквивалентная команда вручную:
+
+```powershell
 dotnet build CivilGPT.csproj -c Release -p:Platform=x64
 ```
+
+**Важно:** если Civil 3D запущен, он держит `CivilGPT.dll` и сборка не сможет перезаписать файл.
+Перед сборкой закройте Civil 3D.
 
 Результат: `bin\x64\Release\CivilGPT.dll` и `appsettings.json` рядом с ним.
 
@@ -76,16 +88,25 @@ CAD/                    слой интеграции с AutoCAD / Civil 3D
   Surfaces/             сбор горизонталей и построение TIN
 Commands/               команды AutoCAD (CommandMethod)
 Configuration/          загрузка настроек
+Infrastructure/         JsonHelper — собственная реализация JSON
 Models/                 параметры операций
 UI/                     панель WPF (PaletteSet)
 ```
 
 ## Замечания по реализации
 
+- **Никаких сторонних зависимостей.** Плагин ссылается только на сборки .NET Framework
+  и AutoCAD. Это принципиально: в процессе AutoCAD нельзя применить binding redirect,
+  поэтому любая NuGet-зависимость (System.Text.Json, System.Memory и их транзитивные
+  зависимости) рискует не загрузиться из-за конфликта версий. JSON реализован
+  самостоятельно в `Infrastructure/JsonHelper.cs`.
+- **Кодировка исходников.** Файлы в UTF-8 без BOM, поэтому в проекте задан
+  `<CodePage>65001</CodePage>`. Без него компилятор читает исходники в системной
+  ANSI-кодировке и кириллица в строках превращается в кракозябры.
 - **Маршалинг потоков.** API Civil 3D не потокобезопасен. Вызовы из панели ИИ
-  проходят через `CadDispatcher.ExecuteInApplicationContext`, а `AiOrchestrator`
-  использует `ConfigureAwait(false)`, чтобы продолжение не выполнялось на потоке UI
-  AutoCAD и не приводило к взаимной блокировке.
+  проходят через `CadDispatcher.ExecuteInApplicationContext`, который дожидается
+  выполнения, а `AiOrchestrator` использует `ConfigureAwait(false)`, чтобы продолжение
+  не выполнялось на потоке UI AutoCAD и не приводило к взаимной блокировке.
 - **Блокировка документа.** Операции записи, инициированные из немодальной панели,
   выполняются под `Document.LockDocument()`.
 - **ПСК/МСК.** Отклонения «по осям чертежа» считаются в текущей ПСК инженера
