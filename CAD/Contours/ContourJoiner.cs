@@ -68,6 +68,8 @@ namespace CivilGPT.CAD.Contours
 
             double cosLimit = Math.Cos(maxAngleDegrees * Math.PI / 180.0);
 
+            var joinedGaps = new List<JoinedGap>();
+
             for (int a = 0; a < ends.Count; a++)
             {
                 for (int b = a + 1; b < ends.Count; b++)
@@ -117,10 +119,20 @@ namespace CivilGPT.CAD.Contours
                     }
 
                     Union(components, rootFirst, rootSecond);
+
+                    joinedGaps.Add(new JoinedGap
+                    {
+                        CurveIndex = first.CurveIndex,
+                        Midpoint = new Point3d(
+                            (first.Point.X + second.Point.X) * 0.5,
+                            (first.Point.Y + second.Point.Y) * 0.5,
+                            0.0)
+                    });
                 }
             }
 
             var byRoot = new Dictionary<int, ContourChain>();
+            var chainByCurve = new Dictionary<int, ContourChain>();
 
             for (int i = 0; i < count; i++)
             {
@@ -135,9 +147,27 @@ namespace CivilGPT.CAD.Contours
                 }
 
                 chain.SegmentIds.Add(curves[i].ObjectId);
+                chainByCurve[i] = chain;
+            }
+
+            // Разрывы внутри цепочки — точные места, где стоят подписи.
+            foreach (JoinedGap gap in joinedGaps)
+            {
+                ContourChain chain;
+                if (chainByCurve.TryGetValue(gap.CurveIndex, out chain))
+                {
+                    chain.GapMidpoints.Add(gap.Midpoint);
+                }
             }
 
             return chains;
+        }
+
+        /// <summary>Стык, который был соединён: нужен для привязки подписей.</summary>
+        private sealed class JoinedGap
+        {
+            public int CurveIndex;
+            public Point3d Midpoint;
         }
 
         private static void CollectEnds(Curve curve, int index, List<EndPoint> ends)

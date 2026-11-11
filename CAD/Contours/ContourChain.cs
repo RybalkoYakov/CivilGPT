@@ -32,6 +32,13 @@ namespace CivilGPT.CAD.Contours
         /// </summary>
         public List<Point3d> Samples { get; } = new List<Point3d>();
 
+        /// <summary>
+        /// Середины разрывов внутри цепочки. Подпись горизонтали стоит как раз
+        /// в таком разрыве, поэтому привязка по ним точнее, чем по расстоянию
+        /// до ближайшей линии: в плотной группе соседняя линия может быть ближе.
+        /// </summary>
+        public List<Point3d> GapMidpoints { get; } = new List<Point3d>();
+
         public bool HasLabel => Label != null;
 
         public bool IsResolved => Elevation.HasValue;

@@ -154,7 +154,9 @@ namespace CivilGPT.CAD.Contours
                 CollectSamples(transaction, chain);
             }
 
-            AssignLabels(chains, matched);
+            var gapMatches = MatchLabelsByGaps(chains, labels);
+
+            AssignLabels(chains, matched, gapMatches);
 
             foreach (ContourChain chain in chains)
             {
@@ -282,14 +284,76 @@ namespace CivilGPT.CAD.Contours
         }
 
         /// <summary>
+        /// Привязать подписи по разрывам цепочек. Подпись горизонтали стоит
+        /// именно в разрыве своей линии, поэтому такой признак надёжнее
+        /// расстояния до ближайшей кривой: в плотной группе соседняя
+        /// горизонталь может оказаться ближе и дать сдвиг на одно сечение.
+        /// </summary>
+        private static Dictionary<ContourChain, ContourLabel> MatchLabelsByGaps(
+            IList<ContourChain> chains,
+            IReadOnlyList<ContourLabel> labels)
+        {
+            var result = new Dictionary<ContourChain, ContourLabel>();
+            var best = new Dictionary<ContourChain, double>();
+
+            const double gapTolerance = 1.5;
+
+            foreach (ContourLabel label in labels)
+            {
+                ContourChain bestChain = null;
+                double bestDistance = double.MaxValue;
+
+                foreach (ContourChain chain in chains)
+                {
+                    foreach (Point3d gap in chain.GapMidpoints)
+                    {
+                        double dx = gap.X - label.Position.X;
+                        double dy = gap.Y - label.Position.Y;
+                        double distance = dx * dx + dy * dy;
+
+                        if (distance < bestDistance)
+                        {
+                            bestDistance = distance;
+                            bestChain = chain;
+                        }
+                    }
+                }
+
+                if (bestChain == null) continue;
+                if (bestDistance > gapTolerance * gapTolerance) continue;
+
+                ContourLabel existing;
+                if (result.TryGetValue(bestChain, out existing))
+                {
+                    if (existing.IsFull && !label.IsFull) continue;
+                    if (existing.IsFull == label.IsFull && bestDistance >= best[bestChain]) continue;
+                }
+
+                result[bestChain] = label;
+                best[bestChain] = bestDistance;
+            }
+
+            return result;
+        }
+
+        /// <summary>
         /// Раздать подписи цепочкам: полная подпись приоритетнее сокращённой.
         /// </summary>
         private static void AssignLabels(
             IEnumerable<ContourChain> chains,
-            IDictionary<ObjectId, ContourLabel> matched)
+            IDictionary<ObjectId, ContourLabel> matched,
+            IDictionary<ContourChain, ContourLabel> byGap)
         {
             foreach (ContourChain chain in chains)
             {
+                ContourLabel gapLabel;
+                if (byGap.TryGetValue(chain, out gapLabel) && gapLabel != null)
+                {
+                    chain.Label = gapLabel;
+                    chain.Anchor = gapLabel.Position;
+                    continue;
+                }
+
                 ContourLabel chosen = null;
 
                 foreach (ObjectId segmentId in chain.SegmentIds)
