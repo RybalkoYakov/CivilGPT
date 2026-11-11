@@ -27,6 +27,11 @@ namespace CivilGPT.CAD.Contours
         /// <summary>Точка для поиска ближайшей опорной горизонтали.</summary>
         public Point3d Anchor { get; set; }
 
+        /// <summary>
+        /// Опорные точки геометрии — для поиска соседних горизонталей.
+        /// </summary>
+        public List<Point3d> Samples { get; } = new List<Point3d>();
+
         public bool HasLabel => Label != null;
 
         public bool IsResolved => Elevation.HasValue;

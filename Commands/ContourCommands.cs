@@ -70,19 +70,51 @@ namespace CivilGPT.Commands
             try
             {
                 using (document.LockDocument())
-                using (Transaction transaction = document.Database.TransactionManager.StartTransaction())
                 {
-                    result = ContourLiftService.Lift(
-                        transaction,
-                        document.Database,
-                        new DocumentService(document).ModelSpaceId,
-                        layerName,
-                        tolerance.Value,
-                        ContourLiftService.DefaultGap,
-                        ContourLiftService.DefaultLateralTolerance,
-                        ContourLiftService.DefaultAngleDegrees);
+                    // Результат предыдущего запуска иначе наложится на новый.
+                    int previous;
 
-                    transaction.Commit();
+                    using (Transaction check = document.Database.TransactionManager.StartTransaction())
+                    {
+                        previous = ContourLiftService.CountLayerEntities(
+                            check,
+                            new DocumentService(document).ModelSpaceId,
+                            ContourLiftService.TargetLayerName);
+                    }
+
+                    if (previous > 0)
+                    {
+                        if (!editor.AskConfirmation(
+                                $"\nНа слое '{ContourLiftService.TargetLayerName}' уже есть объектов: {previous}. " +
+                                "Это результат предыдущего запуска. Удалить его?"))
+                        {
+                            editor.WriteLine("Операция отменена.");
+                            return;
+                        }
+                    }
+
+                    using (Transaction transaction = document.Database.TransactionManager.StartTransaction())
+                    {
+                        if (previous > 0)
+                        {
+                            ContourLiftService.EraseLayerEntities(
+                                transaction,
+                                new DocumentService(document).ModelSpaceId,
+                                ContourLiftService.TargetLayerName);
+                        }
+
+                        result = ContourLiftService.Lift(
+                            transaction,
+                            document.Database,
+                            new DocumentService(document).ModelSpaceId,
+                            layerName,
+                            tolerance.Value,
+                            ContourLiftService.DefaultGap,
+                            ContourLiftService.DefaultLateralTolerance,
+                            ContourLiftService.DefaultAngleDegrees);
+
+                        transaction.Commit();
+                    }
                 }
             }
             catch (System.Exception ex)

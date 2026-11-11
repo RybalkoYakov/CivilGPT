@@ -98,6 +98,9 @@ namespace CivilGPT.CAD.Contours
         /// <summary>Допустимый излом направления на стыке, градусы.</summary>
         public const double DefaultAngleDegrees = 35.0;
 
+        /// <summary>Сечение рельефа по умолчанию, м.</summary>
+        public const double DefaultStep = 0.1;
+
         public static ContourLiftResult Lift(
             Transaction transaction,
             Database database,
@@ -140,6 +143,11 @@ namespace CivilGPT.CAD.Contours
 
             result.ChainsBuilt = chains.Count;
 
+            foreach (ContourChain chain in chains)
+            {
+                CollectSamples(transaction, chain);
+            }
+
             AssignLabels(chains, matched);
 
             foreach (ContourChain chain in chains)
@@ -150,7 +158,7 @@ namespace CivilGPT.CAD.Contours
 
             result.ChainsWithDifferentLabels = CountChainsWithDifferentLabels(chains, matched);
 
-            ContourElevationResolver.Resolve(chains);
+            ContourElevationResolver.Resolve(chains, DefaultStep);
 
             foreach (ContourChain chain in chains)
             {
@@ -210,6 +218,31 @@ namespace CivilGPT.CAD.Contours
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Опорные точки цепочки — по ним ищутся соседние горизонтали.
+        /// </summary>
+        private static void CollectSamples(Transaction transaction, ContourChain chain)
+        {
+            foreach (ObjectId segmentId in chain.SegmentIds)
+            {
+                var curve = transaction.GetObject(segmentId, OpenMode.ForRead, false) as Curve;
+                if (curve == null) continue;
+
+                try
+                {
+                    chain.Samples.Add(curve.StartPoint);
+                    chain.Samples.Add(curve.EndPoint);
+
+                    double middle = (curve.StartParam + curve.EndParam) * 0.5;
+                    chain.Samples.Add(curve.GetPointAtParameter(middle));
+                }
+                catch (System.Exception)
+                {
+                    // Кривая без геометрии — пропускаем.
+                }
+            }
         }
 
         /// <summary>
@@ -409,6 +442,71 @@ namespace CivilGPT.CAD.Contours
             {
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Сколько объектов лежит на слое в пространстве модели.
+        /// Нужно, чтобы предупредить о результате предыдущего запуска.
+        /// </summary>
+        public static int CountLayerEntities(
+            Transaction transaction,
+            ObjectId spaceId,
+            string layerName)
+        {
+            if (string.IsNullOrWhiteSpace(layerName)) return 0;
+
+            var space = transaction.GetObject(spaceId, OpenMode.ForRead) as BlockTableRecord;
+            if (space == null) return 0;
+
+            int count = 0;
+
+            foreach (ObjectId id in space)
+            {
+                var entity = transaction.GetObject(id, OpenMode.ForRead, false) as Entity;
+                if (entity == null) continue;
+
+                if (string.Equals(entity.Layer, layerName, StringComparison.OrdinalIgnoreCase))
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
+        /// <summary>
+        /// Удалить все объекты слоя (результат предыдущего запуска).
+        /// </summary>
+        public static int EraseLayerEntities(
+            Transaction transaction,
+            ObjectId spaceId,
+            string layerName)
+        {
+            if (string.IsNullOrWhiteSpace(layerName)) return 0;
+
+            var space = transaction.GetObject(spaceId, OpenMode.ForRead) as BlockTableRecord;
+            if (space == null) return 0;
+
+            var toErase = new List<ObjectId>();
+
+            foreach (ObjectId id in space)
+            {
+                var entity = transaction.GetObject(id, OpenMode.ForRead, false) as Entity;
+                if (entity == null) continue;
+
+                if (string.Equals(entity.Layer, layerName, StringComparison.OrdinalIgnoreCase))
+                {
+                    toErase.Add(id);
+                }
+            }
+
+            foreach (ObjectId id in toErase)
+            {
+                var entity = transaction.GetObject(id, OpenMode.ForWrite) as Entity;
+                entity?.Erase();
+            }
+
+            return toErase.Count;
         }
 
         /// <summary>
