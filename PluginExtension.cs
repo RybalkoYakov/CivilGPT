@@ -54,7 +54,8 @@ namespace CivilGPT
             Orchestrator = new AiOrchestrator(llm, Tools);
 
             CadApplication.WriteMessage(
-                $"\n[CivilGPT] Плагин загружен. Инструментов в реестре: {Tools.All.Count}.");
+                $"\n[CivilGPT] Плагин загружен (сборка {BuildStamp.Value}). " +
+                $"Инструментов в реестре: {Tools.All.Count}.");
 
             if (hasApiKey)
             {

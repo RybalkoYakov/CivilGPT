@@ -186,7 +186,7 @@ namespace CivilGPT.Commands
 
         private static void Report(EditorService editor, ContourLiftResult result, string layerName)
         {
-            editor.WriteLine("--- Подготовка горизонталей завершена ---");
+            editor.WriteLine($"--- Подготовка горизонталей завершена (сборка {BuildStamp.Value}) ---");
             editor.WriteLine($"Кривых на слое '{layerName}': {result.CurvesFound}");
             editor.WriteLine($"Подписей распознано: {result.LabelsParsed}, привязано к линиям: {result.LabelsMatched}");
 

@@ -42,6 +42,14 @@
     </None>
   </ItemGroup>
 
+  <!-- Штамп сборки: по нему видно, какая версия плагина реально загружена в AutoCAD.
+       AutoCAD не перезагружает уже загруженную DLL, поэтому без штампа
+       невозможно отличить свежую сборку от старой. -->
+  <PropertyGroup>
+    <BuildStamp>$([System.DateTime]::Now.ToString("yyyy-MM-dd HH:mm"))</BuildStamp>
+    <InformationalVersion>$(BuildStamp)</InformationalVersion>
+  </PropertyGroup>
+
   <!-- TestDataset — тестовые чертежи и вспомогательные утилиты, в плагин не входят. -->
   <ItemGroup>
     <Compile Remove="TestDataset\**" />
