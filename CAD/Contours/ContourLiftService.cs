@@ -160,8 +160,7 @@ namespace CivilGPT.CAD.Contours
             result.Conflicts = conflicts;
             result.LabelsMatched = matched.Count;
 
-            List<ContourChain> chains = ContourJoiner.Build(
-                curves, maxGap, lateralTolerance, maxAngleDegrees, matched);
+            List<ContourChain> chains = ContourJoiner.Build(curves, maxGap);
 
             result.ChainsBuilt = chains.Count;
 
@@ -170,9 +169,7 @@ namespace CivilGPT.CAD.Contours
                 CollectSamples(transaction, chain);
             }
 
-            var gapMatches = MatchLabelsByGaps(chains, labels);
-
-            AssignLabels(chains, matched, gapMatches);
+            AssignLabels(chains, matched);
 
             foreach (ContourChain chain in chains)
             {
@@ -384,19 +381,10 @@ namespace CivilGPT.CAD.Contours
         /// </summary>
         private static void AssignLabels(
             IEnumerable<ContourChain> chains,
-            IDictionary<ObjectId, ContourLabel> matched,
-            IDictionary<ContourChain, ContourLabel> byGap)
+            IDictionary<ObjectId, ContourLabel> matched)
         {
             foreach (ContourChain chain in chains)
             {
-                ContourLabel gapLabel;
-                if (byGap.TryGetValue(chain, out gapLabel) && gapLabel != null)
-                {
-                    chain.Label = gapLabel;
-                    chain.Anchor = gapLabel.Position;
-                    continue;
-                }
-
                 ContourLabel chosen = null;
 
                 foreach (ObjectId segmentId in chain.SegmentIds)

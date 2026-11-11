@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
 
@@ -7,239 +8,163 @@ namespace CivilGPT.CAD.Contours
 {
     /// <summary>
     /// Сшивка отрезков в цельные горизонтали.
-    /// Отрезки соединяются, если их концы близко, лежат на одной линии
-    /// (малый боковой зазор) и направления почти совпадают.
+    ///
+    /// Алгоритм: берём необработанный отрезок, ищем ближайший конец другого
+    /// необработанного отрезка в пределах допуска, присоединяем и продолжаем
+    /// с нового конца. То же самое в обратную сторону. Когда продолжения нет —
+    /// цепочка собрана, оба отрезка исключаются из необработанных.
     /// </summary>
     public static class ContourJoiner
     {
         /// <summary>
-        /// Расстояние, при котором концы считаются совпадающими: такой стык
-        /// соединяется без проверки угла и бокового смещения.
+        /// Собрать цепочки.
         /// </summary>
-        private const double CoincidentGap = 0.1;
-
-        private sealed class EndPoint
-        {
-            public int CurveIndex;
-
-            /// <summary>Направление внутрь кривой от этой точки.</summary>
-            public Vector3d Into;
-
-            public Point3d Point;
-        }
-
-        /// <summary>
-        /// Построить цепочки.
-        /// </summary>
-        /// <param name="curves">Отрезки.</param>
-        /// <param name="maxGap">Максимальный разрыв между концами, м.</param>
-        /// <param name="lateralTolerance">Допустимое боковое смещение концов, м.</param>
-        /// <param name="maxAngleDegrees">Допустимый излом направления, градусы.</param>
-        public static List<ContourChain> Build(
-            IReadOnlyList<Curve> curves,
-            double maxGap,
-            double lateralTolerance,
-            double maxAngleDegrees,
-            IDictionary<ObjectId, ContourLabel> labels = null)
+        /// <param name="curves">Отрезки-горизонтали.</param>
+        /// <param name="maxGap">Максимальное расстояние между концами, м.</param>
+        public static List<ContourChain> Build(IReadOnlyList<Curve> curves, double maxGap)
         {
             var chains = new List<ContourChain>();
             if (curves == null || curves.Count == 0) return chains;
 
             int count = curves.Count;
 
-            var ends = new List<EndPoint>(count * 2);
+            var free = new HashSet<int>(Enumerable.Range(0, count));
 
-            for (int i = 0; i < count; i++)
+            while (free.Count > 0)
             {
-                CollectEnds(curves[i], i, ends);
-            }
+                int seed = free.First();
+                free.Remove(seed);
 
-            var components = new Component[count];
-            for (int i = 0; i < count; i++)
-            {
-                components[i] = new Component { Parent = i };
+                var chain = new ContourChain();
+                chain.SegmentIds.Add(curves[seed].ObjectId);
 
-                ContourLabel existing;
-                if (labels != null && labels.TryGetValue(curves[i].ObjectId, out existing))
+                Point3d headEnd = GetEnd(curves, seed, end: true, fallbackToStart: true);
+                Point3d headStart = GetEnd(curves, seed, end: false, fallbackToStart: true);
+
+                bool grew = true;
+
+                while (grew && free.Count > 0)
                 {
-                    components[i].LabelValue = existing.Value;
-                }
-            }
+                    grew = false;
 
-            double cosLimit = Math.Cos(maxAngleDegrees * Math.PI / 180.0);
+                    int index;
+                    bool matchedAtStart;
 
-            var joinedGaps = new List<JoinedGap>();
-
-            for (int a = 0; a < ends.Count; a++)
-            {
-                for (int b = a + 1; b < ends.Count; b++)
-                {
-                    EndPoint first = ends[a];
-                    EndPoint second = ends[b];
-
-                    if (first.CurveIndex == second.CurveIndex) continue;
-
-                    int rootFirst = Root(components, first.CurveIndex);
-                    int rootSecond = Root(components, second.CurveIndex);
-                    if (rootFirst == rootSecond) continue;
-
-                    Vector3d gap = second.Point - first.Point;
-                    double distance = gap.Length;
-                    if (distance > maxGap) continue;
-
-                    // Стык «конец в конец» соединяем при любом угле: горизонталь
-                    // может изломиться у лотка, здания или подпорной стенки.
-                    bool touching = distance <= CoincidentGap;
-
-                    if (!touching)
+                    if (TryTakeNearestEnd(curves, free, headEnd, maxGap, out index, out matchedAtStart))
                     {
-                        // Направления «внутрь своих кривых» должны быть противоположны:
-                        // тогда отрезки продолжают друг друга, а не идут параллельно рядом.
-                        double directionDot = first.Into.DotProduct(second.Into);
-                        if (directionDot > -cosLimit) continue;
+                        free.Remove(index);
+                        chain.SegmentIds.Add(curves[index].ObjectId);
 
-                        // Разрыв должен идти вдоль линии, а не вбок.
-                        Vector3d forward = -first.Into;
-                        double along = gap.DotProduct(forward);
-                        if (along <= 0) continue;
-
-                        Vector3d lateral = gap - forward * along;
-                        if (lateral.Length > lateralTolerance) continue;
-                    }
-
-                    // Подписи — независимая проверка сшивки: в одной горизонтали
-                    // не может быть двух разных отметок. Проверяем по всей цепочке.
-                    double? firstLabel = components[rootFirst].LabelValue;
-                    double? secondLabel = components[rootSecond].LabelValue;
-
-                    if (firstLabel.HasValue && secondLabel.HasValue
-                        && Math.Abs(firstLabel.Value - secondLabel.Value) > 1e-6)
-                    {
+                        headEnd = GetEnd(curves, index, end: !matchedAtStart, fallbackToStart: true);
+                        grew = true;
                         continue;
                     }
 
-                    Union(components, rootFirst, rootSecond);
-
-                    joinedGaps.Add(new JoinedGap
+                    if (TryTakeNearestEnd(curves, free, headStart, maxGap, out index, out matchedAtStart))
                     {
-                        CurveIndex = first.CurveIndex,
-                        Midpoint = new Point3d(
-                            (first.Point.X + second.Point.X) * 0.5,
-                            (first.Point.Y + second.Point.Y) * 0.5,
-                            0.0)
-                    });
-                }
-            }
+                        free.Remove(index);
+                        chain.SegmentIds.Add(curves[index].ObjectId);
 
-            var byRoot = new Dictionary<int, ContourChain>();
-            var chainByCurve = new Dictionary<int, ContourChain>();
-
-            for (int i = 0; i < count; i++)
-            {
-                int root = Root(components, i);
-
-                ContourChain chain;
-                if (!byRoot.TryGetValue(root, out chain))
-                {
-                    chain = new ContourChain();
-                    byRoot[root] = chain;
-                    chains.Add(chain);
+                        headStart = GetEnd(curves, index, end: !matchedAtStart, fallbackToStart: true);
+                        grew = true;
+                    }
                 }
 
-                chain.SegmentIds.Add(curves[i].ObjectId);
-                chainByCurve[i] = chain;
-            }
-
-            // Разрывы внутри цепочки — точные места, где стоят подписи.
-            foreach (JoinedGap gap in joinedGaps)
-            {
-                ContourChain chain;
-                if (chainByCurve.TryGetValue(gap.CurveIndex, out chain))
-                {
-                    chain.GapMidpoints.Add(gap.Midpoint);
-                }
+                chains.Add(chain);
             }
 
             return chains;
         }
 
-        /// <summary>Стык, который был соединён: нужен для привязки подписей.</summary>
-        private sealed class JoinedGap
+        /// <summary>
+        /// Найти среди свободных отрезков ближайший конец к заданной точке.
+        /// </summary>
+        private static bool TryTakeNearestEnd(
+            IReadOnlyList<Curve> curves,
+            HashSet<int> free,
+            Point3d point,
+            double maxGap,
+            out int foundIndex,
+            out bool matchedAtStart)
         {
-            public int CurveIndex;
-            public Point3d Midpoint;
+            foundIndex = -1;
+            matchedAtStart = false;
+
+            double best = maxGap;
+            double bestSquared = maxGap * maxGap;
+
+            foreach (int index in free)
+            {
+                Point3d start;
+                Point3d end;
+
+                if (!GetEnds(curves[index], out start, out end)) continue;
+
+                double toStart = PlanDistance(point, start);
+                if (toStart < bestSquared)
+                {
+                    bestSquared = toStart;
+                    best = Math.Sqrt(toStart);
+                    foundIndex = index;
+                    matchedAtStart = true;
+                }
+
+                double toEnd = PlanDistance(point, end);
+                if (toEnd < bestSquared)
+                {
+                    bestSquared = toEnd;
+                    foundIndex = index;
+                    matchedAtStart = false;
+                }
+            }
+
+            return foundIndex >= 0 && best <= maxGap;
         }
 
-        private static void CollectEnds(Curve curve, int index, List<EndPoint> ends)
+        private static Point3d GetEnd(
+            IReadOnlyList<Curve> curves,
+            int index,
+            bool end,
+            bool fallbackToStart)
         {
-            if (curve == null) return;
+            Point3d start;
+            Point3d finish;
+
+            if (!GetEnds(curves[index], out start, out finish))
+            {
+                return Point3d.Origin;
+            }
+
+            if (end) return finish;
+
+            return start;
+        }
+
+        private static bool GetEnds(Curve curve, out Point3d start, out Point3d end)
+        {
+            start = Point3d.Origin;
+            end = Point3d.Origin;
+
+            if (curve == null) return false;
 
             try
             {
-                Point3d start = curve.StartPoint;
-                Point3d end = curve.EndPoint;
-
-                // Замкнутые горизонтали не сшиваем — они самодостаточны.
-                if (start.DistanceTo(end) < 1e-6) return;
-
-                Vector3d startTangent = ToPlanar(curve.GetFirstDerivative(curve.StartParam));
-                Vector3d endTangent = ToPlanar(curve.GetFirstDerivative(curve.EndParam));
-
-                if (startTangent.Length < 1e-9 || endTangent.Length < 1e-9) return;
-
-                ends.Add(new EndPoint
-                {
-                    CurveIndex = index,
-                    Point = start,
-                    Into = startTangent.GetNormal()
-                });
-
-                ends.Add(new EndPoint
-                {
-                    CurveIndex = index,
-                    Point = end,
-                    Into = -endTangent.GetNormal()
-                });
+                start = curve.StartPoint;
+                end = curve.EndPoint;
+                return true;
             }
             catch (System.Exception)
             {
-                // Кривая с неполной геометрией останется отдельной цепочкой.
+                return false;
             }
         }
 
-        private static Vector3d ToPlanar(Vector3d vector)
+        private static double PlanDistance(Point3d first, Point3d second)
         {
-            return new Vector3d(vector.X, vector.Y, 0.0);
-        }
+            double dx = first.X - second.X;
+            double dy = first.Y - second.Y;
 
-        private static int Root(Component[] components, int index)
-        {
-            while (components[index].Parent != index)
-            {
-                components[index].Parent = components[components[index].Parent].Parent;
-                index = components[index].Parent;
-            }
-            return index;
-        }
-
-        private static void Union(Component[] components, int rootFirst, int rootSecond)
-        {
-            if (rootFirst == rootSecond) return;
-
-            components[rootSecond].Parent = rootFirst;
-
-            // Отметка подписи переносится на объединённую цепочку.
-            if (!components[rootFirst].LabelValue.HasValue)
-            {
-                components[rootFirst].LabelValue = components[rootSecond].LabelValue;
-            }
-        }
-
-        /// <summary>Компонента сшивки: родитель и отметка подписи, если она есть.</summary>
-        private sealed class Component
-        {
-            public int Parent;
-            public double? LabelValue;
+            return dx * dx + dy * dy;
         }
     }
 }
