@@ -3,6 +3,19 @@ using Autodesk.AutoCAD.Geometry;
 
 namespace CivilGPT.CAD.Contours
 {
+    /// <summary>Чем задана подпись в чертеже.</summary>
+    public enum ContourLabelSource
+    {
+        /// <summary>Однострочный или многострочный текст.</summary>
+        Text,
+
+        /// <summary>Мультивыноска — как правило, инженерная отметка, а не горизонталь.</summary>
+        MLeader,
+
+        /// <summary>Атрибут вставки блока (основной вид подписи горизонталей).</summary>
+        BlockAttribute
+    }
+
     /// <summary>
     /// Разобранная подпись у горизонтали.
     /// В исходных чертежах подпись — это не текст, а вставка блока с атрибутом
@@ -12,6 +25,9 @@ namespace CivilGPT.CAD.Contours
     public sealed class ContourLabel
     {
         public ObjectId SourceId { get; set; }
+
+        /// <summary>Вид носителя подписи.</summary>
+        public ContourLabelSource Source { get; set; }
 
         /// <summary>Точка вставки подписи.</summary>
         public Point3d Position { get; set; }

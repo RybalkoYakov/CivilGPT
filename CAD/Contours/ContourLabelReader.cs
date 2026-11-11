@@ -22,13 +22,15 @@ namespace CivilGPT.CAD.Contours
             var text = entity as DBText;
             if (text != null)
             {
-                return Create(entity.ObjectId, text.TextString, text.Position, text.Height);
+                return Create(entity.ObjectId, ContourLabelSource.Text,
+                    text.TextString, text.Position, text.Height);
             }
 
             var mtext = entity as MText;
             if (mtext != null)
             {
-                return Create(entity.ObjectId, mtext.Text, mtext.Location, mtext.TextHeight);
+                return Create(entity.ObjectId, ContourLabelSource.Text,
+                    mtext.Text, mtext.Location, mtext.TextHeight);
             }
 
             var mleader = entity as MLeader;
@@ -46,7 +48,8 @@ namespace CivilGPT.CAD.Contours
                     // Мультивыноска с блоком вместо текста — пропускаем.
                 }
 
-                return Create(entity.ObjectId, content, GetCenter(mleader), 0.0);
+                return Create(entity.ObjectId, ContourLabelSource.MLeader,
+                    content, GetCenter(mleader), 0.0);
             }
 
             var block = entity as BlockReference;
@@ -77,6 +80,7 @@ namespace CivilGPT.CAD.Contours
 
                 ContourLabel label = Create(
                     block.ObjectId,
+                    ContourLabelSource.BlockAttribute,
                     attribute.TextString,
                     attribute.Position,
                     attribute.Height);
@@ -89,6 +93,7 @@ namespace CivilGPT.CAD.Contours
 
         private static ContourLabel Create(
             ObjectId sourceId,
+            ContourLabelSource source,
             string rawText,
             Point3d position,
             double height)
@@ -101,6 +106,7 @@ namespace CivilGPT.CAD.Contours
             return new ContourLabel
             {
                 SourceId = sourceId,
+                Source = source,
                 Position = position,
                 RawText = rawText,
                 Value = value,

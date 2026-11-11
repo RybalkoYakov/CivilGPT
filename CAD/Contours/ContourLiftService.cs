@@ -41,11 +41,39 @@ namespace CivilGPT.CAD.Contours
         /// <summary>Создано полилиний (по числу отрезков).</summary>
         public int ContoursCreated { get; set; }
 
+        /// <summary>Подробности по цепочкам — для диагностики.</summary>
+        public List<ContourChainInfo> Chains { get; } = new List<ContourChainInfo>();
+
+        /// <summary>
+        /// Сколько мультивыносок отклонено как инженерные отметки.
+        /// Они выглядят как полная отметка (202.34) и, попав в якоря,
+        /// сдвигают разворот сокращённых подписей на метр.
+        /// </summary>
+        public int LabelsIgnoredCallouts { get; set; }
+
         public double MinElevation { get; set; }
 
         public double MaxElevation { get; set; }
 
         public bool HasResult => ContoursCreated > 0;
+    }
+
+    /// <summary>
+    /// Сведения об одной горизонтали — для диагностики привязки подписей.
+    /// </summary>
+    public sealed class ContourChainInfo
+    {
+        public double X { get; set; }
+
+        public double Y { get; set; }
+
+        public string LabelText { get; set; }
+
+        public bool IsFull { get; set; }
+
+        public double? Elevation { get; set; }
+
+        public int Segments { get; set; }
     }
 
     /// <summary>
@@ -92,7 +120,8 @@ namespace CivilGPT.CAD.Contours
             var curves = new List<Curve>();
             var labels = new List<ContourLabel>();
 
-            Collect(transaction, modelSpaceId, sourceLayer, curves, labels);
+            result.LabelsIgnoredCallouts = Collect(
+                transaction, modelSpaceId, sourceLayer, curves, labels);
 
             result.CurvesFound = curves.Count;
             result.LabelsParsed = labels.Count;
@@ -122,6 +151,26 @@ namespace CivilGPT.CAD.Contours
             result.ChainsWithDifferentLabels = CountChainsWithDifferentLabels(chains, matched);
 
             ContourElevationResolver.Resolve(chains);
+
+            foreach (ContourChain chain in chains)
+            {
+                Point3d position = chain.Anchor;
+
+                if (chain.Label == null)
+                {
+                    position = GetCentroid(transaction, chain);
+                }
+
+                result.Chains.Add(new ContourChainInfo
+                {
+                    X = position.X,
+                    Y = position.Y,
+                    LabelText = chain.Label != null ? chain.Label.RawText : null,
+                    IsFull = chain.Label != null && chain.Label.IsFull,
+                    Elevation = chain.Elevation,
+                    Segments = chain.SegmentIds.Count
+                });
+            }
 
             ObjectId targetLayerId = EnsureLayer(transaction, database, TargetLayerName, 3);
             var modelSpace = (BlockTableRecord)transaction.GetObject(modelSpaceId, OpenMode.ForWrite);
@@ -161,6 +210,36 @@ namespace CivilGPT.CAD.Contours
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Центр цепочки — нужен для отчёта о горизонталях без подписи.
+        /// </summary>
+        private static Point3d GetCentroid(Transaction transaction, ContourChain chain)
+        {
+            double sumX = 0.0;
+            double sumY = 0.0;
+            int count = 0;
+
+            foreach (ObjectId segmentId in chain.SegmentIds)
+            {
+                var curve = transaction.GetObject(segmentId, OpenMode.ForRead, false) as Curve;
+                if (curve == null) continue;
+
+                try
+                {
+                    Point3d point = curve.StartPoint;
+                    sumX += point.X;
+                    sumY += point.Y;
+                    count++;
+                }
+                catch (System.Exception)
+                {
+                    // Кривая без геометрии — пропускаем.
+                }
+            }
+
+            return count == 0 ? Point3d.Origin : new Point3d(sumX / count, sumY / count, 0.0);
         }
 
         /// <summary>
@@ -238,18 +317,21 @@ namespace CivilGPT.CAD.Contours
 
         /// <summary>
         /// Собрать горизонтали и подписи с указанного слоя.
+        /// Возвращает количество отклонённых мультивыносок.
         /// </summary>
-        public static void Collect(
+        public static int Collect(
             Transaction transaction,
             ObjectId spaceId,
             string layerName,
             List<Curve> curves,
             List<ContourLabel> labels)
         {
-            if (string.IsNullOrWhiteSpace(layerName)) return;
+            if (string.IsNullOrWhiteSpace(layerName)) return 0;
+
+            int ignoredCallouts = 0;
 
             var space = transaction.GetObject(spaceId, OpenMode.ForRead) as BlockTableRecord;
-            if (space == null) return;
+            if (space == null) return 0;
 
             foreach (ObjectId id in space)
             {
@@ -269,8 +351,21 @@ namespace CivilGPT.CAD.Contours
                 }
 
                 ContourLabel label = ContourLabelReader.TryRead(transaction, entity);
-                if (label != null) labels.Add(label);
+                if (label == null) continue;
+
+                // Мультивыноска — почти всегда инженерная отметка (дно колодца,
+                // лоток, верх покрытия), а не подпись горизонтали: 202.34 или
+                // «202.34 д.к.(сущ)». В якоря такие значения пускать нельзя.
+                if (label.Source == ContourLabelSource.MLeader)
+                {
+                    ignoredCallouts++;
+                    continue;
+                }
+
+                labels.Add(label);
             }
+
+            return ignoredCallouts;
         }
 
         /// <summary>

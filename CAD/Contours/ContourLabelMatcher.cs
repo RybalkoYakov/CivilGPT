@@ -7,11 +7,19 @@ namespace CivilGPT.CAD.Contours
 {
     /// <summary>
     /// Привязка подписи к ближайшему отрезку горизонтали.
-    /// Подпись в топографических чертежах ставится в разрыве линии,
-    /// поэтому критерий — минимальное плановое расстояние до кривой.
+    /// Подпись ставится в разрыве линии или у её конца, поэтому критерий —
+    /// плановое расстояние до кривой. Если до ближайшей линии далеко, но она
+    /// заметно ближе остальных, привязка всё равно принимается: в плотной
+    /// группе горизонталей это важнее формального допуска.
     /// </summary>
     public static class ContourLabelMatcher
     {
+        /// <summary>Во сколько раз допускается превысить допуск при явном лидере по расстоянию.</summary>
+        private const double FallbackFactor = 3.0;
+
+        /// <summary>Во сколько раз ближайшая линия должна быть ближе второй.</summary>
+        private const double AmbiguityRatio = 2.0;
+
         public static Dictionary<ObjectId, ContourLabel> Match(
             IReadOnlyList<Curve> curves,
             IReadOnlyList<ContourLabel> labels,
@@ -33,19 +41,32 @@ namespace CivilGPT.CAD.Contours
                 double effectiveTolerance = Math.Max(tolerance, label.Height * 5.0);
 
                 ObjectId nearestCurve = ObjectId.Null;
-                double nearestDistance = double.MaxValue;
+                double nearest = double.MaxValue;
+                double secondBest = double.MaxValue;
 
                 foreach (Curve curve in curves)
                 {
                     double distance = PlanDistanceToCurve(curve, label.Position);
-                    if (distance < nearestDistance)
+
+                    if (distance < nearest)
                     {
-                        nearestDistance = distance;
+                        secondBest = nearest;
+                        nearest = distance;
                         nearestCurve = curve.ObjectId;
+                    }
+                    else if (distance < secondBest)
+                    {
+                        secondBest = distance;
                     }
                 }
 
-                if (nearestCurve.IsNull || nearestDistance > effectiveTolerance) continue;
+                if (nearestCurve.IsNull) continue;
+
+                bool accepted = nearest <= effectiveTolerance
+                                || (nearest <= effectiveTolerance * FallbackFactor
+                                    && secondBest > nearest * AmbiguityRatio);
+
+                if (!accepted) continue;
 
                 ContourLabel existing;
                 if (result.TryGetValue(nearestCurve, out existing))
@@ -53,15 +74,12 @@ namespace CivilGPT.CAD.Contours
                     conflicts++;
 
                     // Оставляем более информативную подпись (полную), затем — ближайшую.
-                    bool existingIsFull = existing.IsFull;
-                    bool newIsFull = label.IsFull;
-
-                    if (existingIsFull && !newIsFull) continue;
-                    if (existingIsFull == newIsFull && nearestDistance >= bestDistance[nearestCurve]) continue;
+                    if (existing.IsFull && !label.IsFull) continue;
+                    if (existing.IsFull == label.IsFull && nearest >= bestDistance[nearestCurve]) continue;
                 }
 
                 result[nearestCurve] = label;
-                bestDistance[nearestCurve] = nearestDistance;
+                bestDistance[nearestCurve] = nearest;
             }
 
             return result;
