@@ -24,6 +24,12 @@ namespace CivilGPT.CAD.Contours
         /// <summary>Восстановленная абсолютная отметка.</summary>
         public double? Elevation { get; set; }
 
+        /// <summary>
+        /// Спорная горизонталь: подпись привязана неточно или на линию
+        /// претендовало несколько подписей. Такие линии выносятся на отдельный слой.
+        /// </summary>
+        public bool IsDisputed { get; set; }
+
         /// <summary>Точка для поиска ближайшей опорной горизонтали.</summary>
         public Point3d Anchor { get; set; }
 

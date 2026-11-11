@@ -24,9 +24,11 @@ namespace CivilGPT.CAD.Contours
             IReadOnlyList<Curve> curves,
             IReadOnlyList<ContourLabel> labels,
             double tolerance,
-            out int conflicts)
+            out int conflicts,
+            out HashSet<ObjectId> uncertain)
         {
             conflicts = 0;
+            uncertain = new HashSet<ObjectId>();
             var result = new Dictionary<ObjectId, ContourLabel>();
 
             if (curves == null || labels == null || labels.Count == 0 || curves.Count == 0)
@@ -106,11 +108,15 @@ namespace CivilGPT.CAD.Contours
                 if (result.TryGetValue(chosen, out existing))
                 {
                     conflicts++;
+                    uncertain.Add(chosen);
 
                     // Оставляем более информативную подпись (полную), затем — ближайшую.
                     if (existing.IsFull && !label.IsFull) continue;
                     if (existing.IsFull == label.IsFull && chosenDistance >= bestDistance[chosen]) continue;
                 }
+
+                // Подпись привязана не вплотную — привязка считается спорной.
+                if (chosenDistance > UncertainDistance) uncertain.Add(chosen);
 
                 result[chosen] = label;
                 bestDistance[chosen] = chosenDistance;
@@ -124,6 +130,9 @@ namespace CivilGPT.CAD.Contours
 
         /// <summary>Расстояние, при котором линия считается лежащей вплотную к подписи, м.</summary>
         private const double CloseLineDistance = 0.4;
+
+        /// <summary>Расстояние, после которого привязка считается спорной, м.</summary>
+        private const double UncertainDistance = 0.5;
 
         /// <summary>Расстояние до ближайшего конца кривой.</summary>
         private static double DistanceToEnds(Curve curve, Point3d point)

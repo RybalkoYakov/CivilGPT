@@ -54,6 +54,12 @@ namespace CivilGPT.CAD.Contours
         /// <summary>Подписей взято с других слоёв.</summary>
         public int LabelsFromOtherLayers { get; set; }
 
+        /// <summary>Спорных горизонталей отрисовано (вынесены на отдельный слой).</summary>
+        public int DisputedCreated { get; set; }
+
+        /// <summary>Объекты-носители подписей — чтобы можно было вынести их на свой слой.</summary>
+        public List<ObjectId> LabelSourceIds { get; } = new List<ObjectId>();
+
         public double MinElevation { get; set; }
 
         public double MaxElevation { get; set; }
@@ -77,6 +83,9 @@ namespace CivilGPT.CAD.Contours
         public double? Elevation { get; set; }
 
         public int Segments { get; set; }
+
+        /// <summary>Привязка подписи спорная.</summary>
+        public bool IsDisputed { get; set; }
     }
 
     /// <summary>
@@ -88,6 +97,12 @@ namespace CivilGPT.CAD.Contours
     {
         /// <summary>Слой, в который складываются готовые горизонтали.</summary>
         public const string TargetLayerName = "CIVILGPT_TIN";
+
+        /// <summary>Слой для горизонталей со спорной привязкой подписи.</summary>
+        public const string DisputedLayerName = "CIVILGPT_TIN_СПОРНЫЕ";
+
+        /// <summary>Слой, на который можно вынести подписи горизонталей.</summary>
+        public const string LabelLayerName = "CIVILGPT_МЕТКИ";
 
         /// <summary>Допуск привязки подписи к линии по умолчанию, м.</summary>
         public const double DefaultLabelTolerance = 1.0;
@@ -138,8 +153,9 @@ namespace CivilGPT.CAD.Contours
             if (curves.Count == 0) return result;
 
             int conflicts;
+            HashSet<ObjectId> uncertain;
             Dictionary<ObjectId, ContourLabel> matched =
-                ContourLabelMatcher.Match(curves, labels, labelTolerance, out conflicts);
+                ContourLabelMatcher.Match(curves, labels, labelTolerance, out conflicts, out uncertain);
 
             result.Conflicts = conflicts;
             result.LabelsMatched = matched.Count;
@@ -166,6 +182,28 @@ namespace CivilGPT.CAD.Contours
 
             result.ChainsWithDifferentLabels = CountChainsWithDifferentLabels(chains, matched);
 
+            // Спорной считается цепочка, у которой подпись привязана неточно
+            // или на её отрезки претендовало несколько подписей.
+            foreach (ContourChain chain in chains)
+            {
+                foreach (ObjectId segmentId in chain.SegmentIds)
+                {
+                    if (uncertain.Contains(segmentId))
+                    {
+                        chain.IsDisputed = true;
+                        break;
+                    }
+                }
+            }
+
+            foreach (ContourLabel label in labels)
+            {
+                if (!label.SourceId.IsNull)
+                {
+                    result.LabelSourceIds.Add(label.SourceId);
+                }
+            }
+
             ContourElevationResolver.Resolve(chains, DefaultStep);
 
             foreach (ContourChain chain in chains)
@@ -184,11 +222,13 @@ namespace CivilGPT.CAD.Contours
                     LabelText = chain.Label != null ? chain.Label.RawText : null,
                     IsFull = chain.Label != null && chain.Label.IsFull,
                     Elevation = chain.Elevation,
-                    Segments = chain.SegmentIds.Count
+                    Segments = chain.SegmentIds.Count,
+                    IsDisputed = chain.IsDisputed
                 });
             }
 
             ObjectId targetLayerId = EnsureLayer(transaction, database, TargetLayerName, 3);
+            ObjectId disputedLayerId = EnsureLayer(transaction, database, DisputedLayerName, 1);
             var modelSpace = (BlockTableRecord)transaction.GetObject(modelSpaceId, OpenMode.ForWrite);
 
             foreach (ContourChain chain in chains)
@@ -200,6 +240,7 @@ namespace CivilGPT.CAD.Contours
                 }
 
                 double elevation = chain.Elevation.Value;
+                ObjectId chainLayerId = chain.IsDisputed ? disputedLayerId : targetLayerId;
 
                 foreach (ObjectId segmentId in chain.SegmentIds)
                 {
@@ -207,12 +248,14 @@ namespace CivilGPT.CAD.Contours
                     if (source == null) continue;
 
                     if (!TryCreateLiftedPolyline(
-                            transaction, source, elevation, targetLayerId, modelSpace))
+                            transaction, source, elevation, chainLayerId, modelSpace))
                     {
                         continue;
                     }
 
                     result.ContoursCreated++;
+
+                    if (chain.IsDisputed) result.DisputedCreated++;
 
                     if (elevation < result.MinElevation) result.MinElevation = elevation;
                     if (elevation > result.MaxElevation) result.MaxElevation = elevation;

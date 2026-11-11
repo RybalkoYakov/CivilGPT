@@ -76,10 +76,12 @@ namespace CivilGPT.Commands
 
                     using (Transaction check = document.Database.TransactionManager.StartTransaction())
                     {
+                        ObjectId spaceId = new DocumentService(document).ModelSpaceId;
+
                         previous = ContourLiftService.CountLayerEntities(
-                            check,
-                            new DocumentService(document).ModelSpaceId,
-                            ContourLiftService.TargetLayerName);
+                                      check, spaceId, ContourLiftService.TargetLayerName)
+                                  + ContourLiftService.CountLayerEntities(
+                                      check, spaceId, ContourLiftService.DisputedLayerName);
                     }
 
                     if (previous > 0)
@@ -101,6 +103,11 @@ namespace CivilGPT.Commands
                                 transaction,
                                 new DocumentService(document).ModelSpaceId,
                                 ContourLiftService.TargetLayerName);
+
+                            ContourLiftService.EraseLayerEntities(
+                                transaction,
+                                new DocumentService(document).ModelSpaceId,
+                                ContourLiftService.DisputedLayerName);
                         }
 
                         result = ContourLiftService.Lift(
@@ -124,7 +131,56 @@ namespace CivilGPT.Commands
             }
 
             Report(editor, result, layerName);
+
+            MoveLabels(editor, document, result);
+
             WriteLog(editor, document, layerName, result);
+        }
+
+        /// <summary>
+        /// По желанию вынести подписи горизонталей на отдельный слой, чтобы
+        /// исходный слой можно было скрыть, а подписи оставить видимыми.
+        /// </summary>
+        private static void MoveLabels(EditorService editor, Document document, ContourLiftResult result)
+        {
+            if (result.LabelSourceIds.Count == 0) return;
+
+            if (!editor.AskConfirmation(
+                    $"\nВынести подписи горизонталей ({result.LabelSourceIds.Count} шт.) " +
+                    $"на слой '{ContourLiftService.LabelLayerName}'?\n" +
+                    "Тогда исходный слой можно будет скрыть, а подписи оставить."))
+            {
+                return;
+            }
+
+            try
+            {
+                using (document.LockDocument())
+                using (Transaction transaction = document.Database.TransactionManager.StartTransaction())
+                {
+                    ObjectId layerId = ContourLiftService.EnsureLayer(
+                        transaction, document.Database, ContourLiftService.LabelLayerName, 2);
+
+                    int moved = 0;
+
+                    foreach (ObjectId id in result.LabelSourceIds)
+                    {
+                        var entity = transaction.GetObject(id, OpenMode.ForWrite, false) as Entity;
+                        if (entity == null) continue;
+
+                        entity.LayerId = layerId;
+                        moved++;
+                    }
+
+                    transaction.Commit();
+                    editor.WriteLine($"Подписей перенесено на слой " +
+                                     $"'{ContourLiftService.LabelLayerName}': {moved}.");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                editor.WriteError("Не удалось перенести подписи: " + ex.Message);
+            }
         }
 
         /// <summary>
@@ -154,9 +210,10 @@ namespace CivilGPT.Commands
                                    + ", с подписью: " + result.ChainsLabeled
                                    + ", без подписи: " + result.ChainsUnlabeled);
                 builder.AppendLine("Не разрешено: " + result.Unresolved);
-                builder.AppendLine("Создано полилиний: " + result.ContoursCreated);
+                builder.AppendLine("Создано полилиний: " + result.ContoursCreated
+                                   + ", из них спорных: " + result.DisputedCreated);
                 builder.AppendLine();
-                builder.AppendLine("X\tY\tПодпись\tПолная\tОтметка\tОтрезков");
+                builder.AppendLine("X\tY\tПодпись\tПолная\tОтметка\tОтрезков\tСпорная");
 
                 foreach (ContourChainInfo chain in result.Chains)
                 {
@@ -169,7 +226,8 @@ namespace CivilGPT.Commands
                         chain.Elevation.HasValue
                             ? chain.Elevation.Value.ToString("F3", System.Globalization.CultureInfo.InvariantCulture)
                             : "-",
-                        chain.Segments.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                        chain.Segments.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        chain.IsDisputed ? "да" : ""
                     }));
                 }
 
@@ -198,6 +256,18 @@ namespace CivilGPT.Commands
                 $"Собрано горизонталей из отрезков: {result.ChainsBuilt} " +
                 $"(с подписью {result.ChainsLabeled}, без подписи {result.ChainsUnlabeled})");
             editor.WriteLine($"Создано полилиний на слое '{ContourLiftService.TargetLayerName}': {result.ContoursCreated}");
+
+            if (result.DisputedCreated > 0)
+            {
+                editor.WriteLine(
+                    $"Спорных привязок: {result.DisputedCreated} — вынесены на слой " +
+                    $"'{ContourLiftService.DisputedLayerName}' (красный). " +
+                    "Их стоит проверить и при необходимости поправить.");
+            }
+            else
+            {
+                editor.WriteLine("Спорных привязок нет.");
+            }
 
             if (result.HasResult)
             {
