@@ -18,6 +18,12 @@ namespace CivilGPT.CAD.Contours
         /// <summary>Отрезки, из которых состоит горизонталь.</summary>
         public List<ObjectId> SegmentIds { get; private set; }
 
+        /// <summary>
+        /// Упорядоченные вершины всей цепочки. Из них строится одна итоговая
+        /// полилиния, а не набор отдельных кусков.
+        /// </summary>
+        public List<Point3d> Points { get; } = new List<Point3d>();
+
         /// <summary>Подпись, привязанная к любому из отрезков. Может отсутствовать.</summary>
         public ContourLabel Label { get; set; }
 

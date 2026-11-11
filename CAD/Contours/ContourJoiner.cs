@@ -10,25 +10,25 @@ namespace CivilGPT.CAD.Contours
     /// Сшивка отрезков в цельные горизонтали.
     ///
     /// Алгоритм: берём необработанный отрезок, ищем ближайший конец другого
-    /// необработанного отрезка в пределах допуска, присоединяем и продолжаем
-    /// с нового конца. То же самое в обратную сторону. Когда продолжения нет —
-    /// цепочка собрана, оба отрезка исключаются из необработанных.
+    /// необработанного отрезка, присоединяем и продолжаем с нового конца.
+    /// То же в обратную сторону. Когда продолжения нет — цепочка собрана,
+    /// её отрезки исключаются из необработанных, а вершины складываются
+    /// в один упорядоченный список для итоговой полилинии.
     /// </summary>
     public static class ContourJoiner
     {
-        /// <summary>
-        /// Собрать цепочки.
-        /// </summary>
-        /// <param name="curves">Отрезки-горизонтали.</param>
-        /// <param name="maxGap">Максимальное расстояние между концами, м.</param>
+        /// <summary>Дальний предел поиска: конец может быть далеко, если он явно ближайший.</summary>
+        private const double FarGap = 30.0;
+
+        /// <summary>Во сколько раз ближайший конец должен быть ближе второго, чтобы брать дальний.</summary>
+        private const double Prominence = 0.5;
+
         public static List<ContourChain> Build(IReadOnlyList<Curve> curves, double maxGap)
         {
             var chains = new List<ContourChain>();
             if (curves == null || curves.Count == 0) return chains;
 
-            int count = curves.Count;
-
-            var free = new HashSet<int>(Enumerable.Range(0, count));
+            var free = new HashSet<int>(Enumerable.Range(0, curves.Count));
 
             while (free.Count > 0)
             {
@@ -38,8 +38,13 @@ namespace CivilGPT.CAD.Contours
                 var chain = new ContourChain();
                 chain.SegmentIds.Add(curves[seed].ObjectId);
 
-                Point3d headEnd = GetEnd(curves, seed, end: true, fallbackToStart: true);
-                Point3d headStart = GetEnd(curves, seed, end: false, fallbackToStart: true);
+                List<Point3d> points = GetPoints(curves[seed]);
+                if (points.Count < 2) continue;
+
+                chain.Points.AddRange(points);
+
+                Point3d headStart = chain.Points[0];
+                Point3d headEnd = chain.Points[chain.Points.Count - 1];
 
                 bool grew = true;
 
@@ -53,20 +58,36 @@ namespace CivilGPT.CAD.Contours
                     if (TryTakeNearestEnd(curves, free, headEnd, maxGap, out index, out matchedAtStart))
                     {
                         free.Remove(index);
-                        chain.SegmentIds.Add(curves[index].ObjectId);
 
-                        headEnd = GetEnd(curves, index, end: !matchedAtStart, fallbackToStart: true);
-                        grew = true;
-                        continue;
+                        List<Point3d> oriented = Orient(GetPoints(curves[index]), matchedAtStart);
+                        if (oriented.Count >= 2)
+                        {
+                            chain.SegmentIds.Add(curves[index].ObjectId);
+                            chain.Points.AddRange(oriented.Skip(1));
+                            headEnd = chain.Points[chain.Points.Count - 1];
+                            grew = true;
+                            continue;
+                        }
                     }
 
                     if (TryTakeNearestEnd(curves, free, headStart, maxGap, out index, out matchedAtStart))
                     {
                         free.Remove(index);
-                        chain.SegmentIds.Add(curves[index].ObjectId);
 
-                        headStart = GetEnd(curves, index, end: !matchedAtStart, fallbackToStart: true);
-                        grew = true;
+                        // Пристраиваем спереди: разворачиваем так, чтобы последняя
+                        // точка совпала с началом цепочки.
+                        List<Point3d> oriented = Orient(GetPoints(curves[index]), !matchedAtStart);
+                        oriented.Reverse();
+
+                        if (oriented.Count >= 2)
+                        {
+                            chain.SegmentIds.Add(curves[index].ObjectId);
+
+                            var prefix = oriented.Take(oriented.Count - 1).ToList();
+                            chain.Points.InsertRange(0, prefix);
+                            headStart = chain.Points[0];
+                            grew = true;
+                        }
                     }
                 }
 
@@ -77,7 +98,19 @@ namespace CivilGPT.CAD.Contours
         }
 
         /// <summary>
-        /// Найти среди свободных отрезков ближайший конец к заданной точке.
+        /// Развернуть точки отрезка так, чтобы первой шла точка, которой он
+        /// примыкает к цепочке.
+        /// </summary>
+        private static List<Point3d> Orient(List<Point3d> points, bool atStart)
+        {
+            if (!atStart) points.Reverse();
+
+            return points;
+        }
+
+        /// <summary>
+        /// Ближайший свободный конец. Берём в пределах maxGap; если он дальше,
+        /// но заметно ближе всех остальных — тоже берём.
         /// </summary>
         private static bool TryTakeNearestEnd(
             IReadOnlyList<Curve> curves,
@@ -90,73 +123,98 @@ namespace CivilGPT.CAD.Contours
             foundIndex = -1;
             matchedAtStart = false;
 
-            double best = maxGap;
-            double bestSquared = maxGap * maxGap;
+            double best = double.MaxValue;
+            double second = double.MaxValue;
+            int bestIndex = -1;
+            bool bestAtStart = false;
 
             foreach (int index in free)
             {
-                Point3d start;
-                Point3d end;
+                List<Point3d> points = GetPoints(curves[index]);
+                if (points.Count < 2) continue;
 
-                if (!GetEnds(curves[index], out start, out end)) continue;
+                double toStart = PlanDistance(point, points[0]);
+                double toEnd = PlanDistance(point, points[points.Count - 1]);
 
-                double toStart = PlanDistance(point, start);
-                if (toStart < bestSquared)
-                {
-                    bestSquared = toStart;
-                    best = Math.Sqrt(toStart);
-                    foundIndex = index;
-                    matchedAtStart = true;
-                }
-
-                double toEnd = PlanDistance(point, end);
-                if (toEnd < bestSquared)
-                {
-                    bestSquared = toEnd;
-                    foundIndex = index;
-                    matchedAtStart = false;
-                }
+                AddCandidate(toStart, true, ref best, ref second, ref bestIndex, ref bestAtStart, index);
+                AddCandidate(toEnd, false, ref best, ref second, ref bestIndex, ref bestAtStart, index);
             }
 
-            return foundIndex >= 0 && best <= maxGap;
+            if (bestIndex < 0) return false;
+
+            bool close = best <= maxGap;
+            bool prominent = best <= FarGap && best < second * Prominence;
+
+            if (!close && !prominent) return false;
+
+            foundIndex = bestIndex;
+            matchedAtStart = bestAtStart;
+            return true;
         }
 
-        private static Point3d GetEnd(
-            IReadOnlyList<Curve> curves,
-            int index,
-            bool end,
-            bool fallbackToStart)
+        private static void AddCandidate(
+            double distance,
+            bool atStart,
+            ref double best,
+            ref double second,
+            ref int bestIndex,
+            ref bool bestAtStart,
+            int index)
         {
-            Point3d start;
-            Point3d finish;
-
-            if (!GetEnds(curves[index], out start, out finish))
+            if (distance < best)
             {
-                return Point3d.Origin;
+                second = best;
+                best = distance;
+                bestIndex = index;
+                bestAtStart = atStart;
             }
-
-            if (end) return finish;
-
-            return start;
+            else if (distance < second)
+            {
+                second = distance;
+            }
         }
 
-        private static bool GetEnds(Curve curve, out Point3d start, out Point3d end)
+        /// <summary>
+        /// Вершины кривой по порядку. Дуги не поддерживаются — горизонтали
+        /// на этих чертежах состоят из отрезков.
+        /// </summary>
+        private static List<Point3d> GetPoints(Curve curve)
         {
-            start = Point3d.Origin;
-            end = Point3d.Origin;
-
-            if (curve == null) return false;
+            var points = new List<Point3d>();
+            if (curve == null) return points;
 
             try
             {
-                start = curve.StartPoint;
-                end = curve.EndPoint;
-                return true;
+                var polyline = curve as Polyline;
+                if (polyline != null)
+                {
+                    for (int i = 0; i < polyline.NumberOfVertices; i++)
+                    {
+                        Point2d vertex = polyline.GetPoint2dAt(i);
+                        points.Add(new Point3d(vertex.X, vertex.Y, 0.0));
+                    }
+
+                    return points;
+                }
+
+                // Прочие кривые: снимаем точки по параметру.
+                double start = curve.StartParam;
+                double end = curve.EndParam;
+                const int steps = 20;
+
+                for (int i = 0; i <= steps; i++)
+                {
+                    double parameter = start + (end - start) * i / steps;
+                    Point3d point = curve.GetPointAtParameter(parameter);
+                    points.Add(new Point3d(point.X, point.Y, 0.0));
+                }
             }
             catch (System.Exception)
             {
-                return false;
+                points.Clear();
             }
+
+            return points;
         }
 
         private static double PlanDistance(Point3d first, Point3d second)
@@ -164,7 +222,7 @@ namespace CivilGPT.CAD.Contours
             double dx = first.X - second.X;
             double dy = first.Y - second.Y;
 
-            return dx * dx + dy * dy;
+            return Math.Sqrt(dx * dx + dy * dy);
         }
     }
 }

@@ -115,8 +115,13 @@ namespace CivilGPT.CAD.Contours
                     if (existing.IsFull == label.IsFull && chosenDistance >= bestDistance[chosen]) continue;
                 }
 
-                // Подпись привязана не вплотную — привязка считается спорной.
-                if (chosenDistance > UncertainDistance) uncertain.Add(chosen);
+                // Спорная привязка — когда рядом оказалась вторая линия почти
+                // так же близко: именно там подпись может уехать на соседнюю.
+                if (chosenDistance > UncertainDistance
+                    || (secondBest < nearest * AmbiguityRatio && nearest > CloseLineDistance))
+                {
+                    uncertain.Add(chosen);
+                }
 
                 result[chosen] = label;
                 bestDistance[chosen] = chosenDistance;

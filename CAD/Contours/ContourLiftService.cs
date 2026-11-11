@@ -239,24 +239,19 @@ namespace CivilGPT.CAD.Contours
                 double elevation = chain.Elevation.Value;
                 ObjectId chainLayerId = chain.IsDisputed ? disputedLayerId : targetLayerId;
 
-                foreach (ObjectId segmentId in chain.SegmentIds)
+                // Одна цепочка — одна полилиния: иначе горизонталь оказывается
+                // разбитой на куски, и каждый кусок живёт своей высотой.
+                if (!TryCreateChainPolyline(transaction, chain, elevation, chainLayerId, modelSpace))
                 {
-                    var source = transaction.GetObject(segmentId, OpenMode.ForRead) as Curve;
-                    if (source == null) continue;
-
-                    if (!TryCreateLiftedPolyline(
-                            transaction, source, elevation, chainLayerId, modelSpace))
-                    {
-                        continue;
-                    }
-
-                    result.ContoursCreated++;
-
-                    if (chain.IsDisputed) result.DisputedCreated++;
-
-                    if (elevation < result.MinElevation) result.MinElevation = elevation;
-                    if (elevation > result.MaxElevation) result.MaxElevation = elevation;
+                    continue;
                 }
+
+                result.ContoursCreated++;
+
+                if (chain.IsDisputed) result.DisputedCreated++;
+
+                if (elevation < result.MinElevation) result.MinElevation = elevation;
+                if (elevation > result.MaxElevation) result.MaxElevation = elevation;
             }
 
             if (result.ContoursCreated == 0)
@@ -443,7 +438,13 @@ namespace CivilGPT.CAD.Contours
                     }
                 }
 
-                if (different) count++;
+                if (different)
+                {
+                    // В одну цепочку склеились линии с разными подписями:
+                    // такую цепочку нельзя считать надёжной.
+                    chain.IsDisputed = true;
+                    count++;
+                }
             }
 
             return count;
@@ -572,6 +573,63 @@ namespace CivilGPT.CAD.Contours
 
             return layerName.IndexOf("экспликац", StringComparison.OrdinalIgnoreCase) >= 0
                    || layerName.IndexOf("стройсетк", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        /// <summary>
+        /// Создать одну полилинию по всей цепочке на нужной отметке.
+        /// Соединение отдельных отрезков в одну линию — главное: иначе
+        /// горизонталь остаётся разбитой на куски.
+        /// </summary>
+        private static bool TryCreateChainPolyline(
+            Transaction transaction,
+            ContourChain chain,
+            double elevation,
+            ObjectId layerId,
+            BlockTableRecord blockTableRecord)
+        {
+            try
+            {
+                List<Point3d> points = chain.Points;
+
+                if (points == null || points.Count < 2) return false;
+
+                // Замкнутый контур: последняя точка совпадает с первой.
+                bool closed = PlanDistance(points[0], points[points.Count - 1]) < 1e-4;
+
+                int count = closed ? points.Count - 1 : points.Count;
+                if (count < 2) return false;
+
+                var polyline = new Polyline(count)
+                {
+                    Elevation = elevation,
+                    LayerId = layerId,
+                    ColorIndex = 256
+                };
+
+                for (int i = 0; i < count; i++)
+                {
+                    polyline.AddVertexAt(i, new Point2d(points[i].X, points[i].Y), 0.0, 0.0, 0.0);
+                }
+
+                polyline.Closed = closed;
+
+                blockTableRecord.AppendEntity(polyline);
+                transaction.AddNewlyCreatedDBObject(polyline, true);
+
+                return true;
+            }
+            catch (System.Exception)
+            {
+                return false;
+            }
+        }
+
+        private static double PlanDistance(Point3d first, Point3d second)
+        {
+            double dx = first.X - second.X;
+            double dy = first.Y - second.Y;
+
+            return Math.Sqrt(dx * dx + dy * dy);
         }
 
         /// <summary>
