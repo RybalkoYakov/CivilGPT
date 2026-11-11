@@ -127,7 +127,7 @@ namespace CivilGPT.Commands
             {
                 editor.WriteLine(
                     $"Внимание: цепочек с разными подписями — {result.ChainsWithDifferentLabels}. " +
-                    "Возможно, сшились разные горизонтали — уменьшите допуск разрыва.");
+                    "Это признак ошибки сшивки, сообщите разработчику.");
             }
 
             if (!result.HasResult)

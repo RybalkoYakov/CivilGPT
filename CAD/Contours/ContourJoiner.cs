@@ -12,6 +12,12 @@ namespace CivilGPT.CAD.Contours
     /// </summary>
     public static class ContourJoiner
     {
+        /// <summary>
+        /// Расстояние, при котором концы считаются совпадающими: такой стык
+        /// соединяется без проверки угла и бокового смещения.
+        /// </summary>
+        private const double CoincidentGap = 0.1;
+
         private sealed class EndPoint
         {
             public int CurveIndex;
@@ -48,8 +54,17 @@ namespace CivilGPT.CAD.Contours
                 CollectEnds(curves[i], i, ends);
             }
 
-            var parent = new int[count];
-            for (int i = 0; i < count; i++) parent[i] = i;
+            var components = new Component[count];
+            for (int i = 0; i < count; i++)
+            {
+                components[i] = new Component { Parent = i };
+
+                ContourLabel existing;
+                if (labels != null && labels.TryGetValue(curves[i].ObjectId, out existing))
+                {
+                    components[i].LabelValue = existing.Value;
+                }
+            }
 
             double cosLimit = Math.Cos(maxAngleDegrees * Math.PI / 180.0);
 
@@ -61,41 +76,47 @@ namespace CivilGPT.CAD.Contours
                     EndPoint second = ends[b];
 
                     if (first.CurveIndex == second.CurveIndex) continue;
-                    if (Root(parent, first.CurveIndex) == Root(parent, second.CurveIndex)) continue;
 
-                    // Направления «внутрь своих кривых» должны быть противоположны:
-                    // тогда отрезки продолжают друг друга, а не идут параллельно рядом.
-                    double directionDot = first.Into.DotProduct(second.Into);
-                    if (directionDot > -cosLimit) continue;
+                    int rootFirst = Root(components, first.CurveIndex);
+                    int rootSecond = Root(components, second.CurveIndex);
+                    if (rootFirst == rootSecond) continue;
 
                     Vector3d gap = second.Point - first.Point;
                     double distance = gap.Length;
                     if (distance > maxGap) continue;
 
-                    // Разрыв должен идти вдоль линии, а не вбок.
-                    Vector3d forward = -first.Into;
-                    double along = gap.DotProduct(forward);
-                    if (along <= 0) continue;
+                    // Стык «конец в конец» соединяем при любом угле: горизонталь
+                    // может изломиться у лотка, здания или подпорной стенки.
+                    bool touching = distance <= CoincidentGap;
 
-                    Vector3d lateral = gap - forward * along;
-                    if (lateral.Length > lateralTolerance) continue;
-
-                    // Подписи — независимая проверка сшивки:
-                    // два отрезка с разными отметками не могут быть одной горизонталью.
-                    if (labels != null)
+                    if (!touching)
                     {
-                        ContourLabel firstLabel, secondLabel;
-                        bool firstHas = labels.TryGetValue(curves[first.CurveIndex].ObjectId, out firstLabel);
-                        bool secondHas = labels.TryGetValue(curves[second.CurveIndex].ObjectId, out secondLabel);
+                        // Направления «внутрь своих кривых» должны быть противоположны:
+                        // тогда отрезки продолжают друг друга, а не идут параллельно рядом.
+                        double directionDot = first.Into.DotProduct(second.Into);
+                        if (directionDot > -cosLimit) continue;
 
-                        if (firstHas && secondHas
-                            && Math.Abs(firstLabel.Value - secondLabel.Value) > 1e-6)
-                        {
-                            continue;
-                        }
+                        // Разрыв должен идти вдоль линии, а не вбок.
+                        Vector3d forward = -first.Into;
+                        double along = gap.DotProduct(forward);
+                        if (along <= 0) continue;
+
+                        Vector3d lateral = gap - forward * along;
+                        if (lateral.Length > lateralTolerance) continue;
                     }
 
-                    Union(parent, first.CurveIndex, second.CurveIndex);
+                    // Подписи — независимая проверка сшивки: в одной горизонтали
+                    // не может быть двух разных отметок. Проверяем по всей цепочке.
+                    double? firstLabel = components[rootFirst].LabelValue;
+                    double? secondLabel = components[rootSecond].LabelValue;
+
+                    if (firstLabel.HasValue && secondLabel.HasValue
+                        && Math.Abs(firstLabel.Value - secondLabel.Value) > 1e-6)
+                    {
+                        continue;
+                    }
+
+                    Union(components, rootFirst, rootSecond);
                 }
             }
 
@@ -103,7 +124,7 @@ namespace CivilGPT.CAD.Contours
 
             for (int i = 0; i < count; i++)
             {
-                int root = Root(parent, i);
+                int root = Root(components, i);
 
                 ContourChain chain;
                 if (!byRoot.TryGetValue(root, out chain))
@@ -161,25 +182,34 @@ namespace CivilGPT.CAD.Contours
             return new Vector3d(vector.X, vector.Y, 0.0);
         }
 
-        private static int Root(int[] parent, int index)
+        private static int Root(Component[] components, int index)
         {
-            while (parent[index] != index)
+            while (components[index].Parent != index)
             {
-                parent[index] = parent[parent[index]];
-                index = parent[index];
+                components[index].Parent = components[components[index].Parent].Parent;
+                index = components[index].Parent;
             }
             return index;
         }
 
-        private static void Union(int[] parent, int first, int second)
+        private static void Union(Component[] components, int rootFirst, int rootSecond)
         {
-            int rootFirst = Root(parent, first);
-            int rootSecond = Root(parent, second);
+            if (rootFirst == rootSecond) return;
 
-            if (rootFirst != rootSecond)
+            components[rootSecond].Parent = rootFirst;
+
+            // Отметка подписи переносится на объединённую цепочку.
+            if (!components[rootFirst].LabelValue.HasValue)
             {
-                parent[rootSecond] = rootFirst;
+                components[rootFirst].LabelValue = components[rootSecond].LabelValue;
             }
+        }
+
+        /// <summary>Компонента сшивки: родитель и отметка подписи, если она есть.</summary>
+        private sealed class Component
+        {
+            public int Parent;
+            public double? LabelValue;
         }
     }
 }
