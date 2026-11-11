@@ -17,12 +17,6 @@ namespace CivilGPT.CAD.Contours
     /// </summary>
     public static class ContourJoiner
     {
-        /// <summary>Дальний предел поиска: конец может быть далеко, если он явно ближайший.</summary>
-        private const double FarGap = 30.0;
-
-        /// <summary>Во сколько раз ближайший конец должен быть ближе второго, чтобы брать дальний.</summary>
-        private const double Prominence = 0.5;
-
         public static List<ContourChain> Build(IReadOnlyList<Curve> curves, double maxGap)
         {
             var chains = new List<ContourChain>();
@@ -109,8 +103,8 @@ namespace CivilGPT.CAD.Contours
         }
 
         /// <summary>
-        /// Ближайший свободный конец. Берём в пределах maxGap; если он дальше,
-        /// но заметно ближе всех остальных — тоже берём.
+        /// Ближайший свободный конец в пределах допуска. Допуск маленький:
+        /// концы дальше него — это уже другая горизонталь.
         /// </summary>
         private static bool TryTakeNearestEnd(
             IReadOnlyList<Curve> curves,
@@ -123,8 +117,7 @@ namespace CivilGPT.CAD.Contours
             foundIndex = -1;
             matchedAtStart = false;
 
-            double best = double.MaxValue;
-            double second = double.MaxValue;
+            double best = maxGap;
             int bestIndex = -1;
             bool bestAtStart = false;
 
@@ -134,44 +127,27 @@ namespace CivilGPT.CAD.Contours
                 if (points.Count < 2) continue;
 
                 double toStart = PlanDistance(point, points[0]);
-                double toEnd = PlanDistance(point, points[points.Count - 1]);
+                if (toStart <= best)
+                {
+                    best = toStart;
+                    bestIndex = index;
+                    bestAtStart = true;
+                }
 
-                AddCandidate(toStart, true, ref best, ref second, ref bestIndex, ref bestAtStart, index);
-                AddCandidate(toEnd, false, ref best, ref second, ref bestIndex, ref bestAtStart, index);
+                double toEnd = PlanDistance(point, points[points.Count - 1]);
+                if (toEnd <= best)
+                {
+                    best = toEnd;
+                    bestIndex = index;
+                    bestAtStart = false;
+                }
             }
 
             if (bestIndex < 0) return false;
 
-            bool close = best <= maxGap;
-            bool prominent = best <= FarGap && best < second * Prominence;
-
-            if (!close && !prominent) return false;
-
             foundIndex = bestIndex;
             matchedAtStart = bestAtStart;
             return true;
-        }
-
-        private static void AddCandidate(
-            double distance,
-            bool atStart,
-            ref double best,
-            ref double second,
-            ref int bestIndex,
-            ref bool bestAtStart,
-            int index)
-        {
-            if (distance < best)
-            {
-                second = best;
-                best = distance;
-                bestIndex = index;
-                bestAtStart = atStart;
-            }
-            else if (distance < second)
-            {
-                second = distance;
-            }
         }
 
         /// <summary>

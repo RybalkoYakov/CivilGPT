@@ -108,7 +108,10 @@ namespace CivilGPT.CAD.Contours
         public const double DefaultLabelTolerance = 1.0;
 
         /// <summary>Допустимый разрыв между отрезками одной горизонтали, м.</summary>
-        public const double DefaultGap = 6.0;
+        /// <summary>
+        /// Допуск стыковки концов. Концы дальше этого — уже другая горизонталь.
+        /// </summary>
+        public const double DefaultGap = 0.1;
 
         /// <summary>Допустимое боковое смещение стыкуемых концов, м.</summary>
         public const double DefaultLateralTolerance = 1.0;
