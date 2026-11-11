@@ -44,6 +44,12 @@ namespace CivilGPT.CAD.Contours
                 double nearest = double.MaxValue;
                 double secondBest = double.MaxValue;
 
+                // Подпись стоит в разрыве своей линии, то есть рядом с её концом.
+                // Соседняя целая линия может проходить ближе к тексту, поэтому
+                // сначала ищем линию с близким концом, и только потом ближайшую.
+                ObjectId endCurve = ObjectId.Null;
+                double endDistance = double.MaxValue;
+
                 foreach (Curve curve in curves)
                 {
                     double distance = PlanDistanceToCurve(curve, label.Position);
@@ -58,31 +64,87 @@ namespace CivilGPT.CAD.Contours
                     {
                         secondBest = distance;
                     }
+
+                    double distanceToEnd = DistanceToEnds(curve, label.Position);
+
+                    if (distanceToEnd < endDistance)
+                    {
+                        endDistance = distanceToEnd;
+                        endCurve = curve.ObjectId;
+                    }
                 }
 
-                if (nearestCurve.IsNull) continue;
+                ObjectId chosen;
+                double chosenDistance;
 
-                bool accepted = nearest <= effectiveTolerance
-                                || (nearest <= effectiveTolerance * FallbackFactor
-                                    && secondBest > nearest * AmbiguityRatio);
+                // Если рядом есть линия вплотную — верим ей: подпись стоит
+                // прямо на линии. К поиску по концам переходим, только когда
+                // вплотную ничего нет, то есть подпись висит в разрыве.
+                if (nearest <= CloseLineDistance
+                    || endCurve.IsNull
+                    || endDistance > effectiveTolerance * EndFactor
+                    || endDistance >= nearest)
+                {
+                    if (nearestCurve.IsNull) continue;
 
-                if (!accepted) continue;
+                    bool accepted = nearest <= effectiveTolerance
+                                    || (nearest <= effectiveTolerance * FallbackFactor
+                                        && secondBest > nearest * AmbiguityRatio);
+
+                    if (!accepted) continue;
+
+                    chosen = nearestCurve;
+                    chosenDistance = nearest;
+                }
+                else
+                {
+                    chosen = endCurve;
+                    chosenDistance = endDistance;
+                }
 
                 ContourLabel existing;
-                if (result.TryGetValue(nearestCurve, out existing))
+                if (result.TryGetValue(chosen, out existing))
                 {
                     conflicts++;
 
                     // Оставляем более информативную подпись (полную), затем — ближайшую.
                     if (existing.IsFull && !label.IsFull) continue;
-                    if (existing.IsFull == label.IsFull && nearest >= bestDistance[nearestCurve]) continue;
+                    if (existing.IsFull == label.IsFull && chosenDistance >= bestDistance[chosen]) continue;
                 }
 
-                result[nearestCurve] = label;
-                bestDistance[nearestCurve] = nearest;
+                result[chosen] = label;
+                bestDistance[chosen] = chosenDistance;
             }
 
             return result;
+        }
+
+        /// <summary>Во сколько раз допускается превысить допуск при близком конце линии.</summary>
+        private const double EndFactor = 2.0;
+
+        /// <summary>Расстояние, при котором линия считается лежащей вплотную к подписи, м.</summary>
+        private const double CloseLineDistance = 0.4;
+
+        /// <summary>Расстояние до ближайшего конца кривой.</summary>
+        private static double DistanceToEnds(Curve curve, Point3d point)
+        {
+            try
+            {
+                Point3d start = curve.StartPoint;
+                Point3d end = curve.EndPoint;
+
+                double toStart = Math.Sqrt(
+                    (start.X - point.X) * (start.X - point.X) + (start.Y - point.Y) * (start.Y - point.Y));
+
+                double toEnd = Math.Sqrt(
+                    (end.X - point.X) * (end.X - point.X) + (end.Y - point.Y) * (end.Y - point.Y));
+
+                return Math.Min(toStart, toEnd);
+            }
+            catch (System.Exception)
+            {
+                return double.MaxValue;
+            }
         }
 
         private static double PlanDistanceToCurve(Curve curve, Point3d point)
