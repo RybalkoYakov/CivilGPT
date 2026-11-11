@@ -124,6 +124,64 @@ namespace CivilGPT.Commands
             }
 
             Report(editor, result, layerName);
+            WriteLog(editor, document, layerName, result);
+        }
+
+        /// <summary>
+        /// Записать отчёт рядом с чертежом: по нему видно, что именно
+        /// произошло с каждой горизонталью.
+        /// </summary>
+        private static void WriteLog(
+            EditorService editor,
+            Document document,
+            string layerName,
+            ContourLiftResult result)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(document.Name)) return;
+
+                string logPath = System.IO.Path.ChangeExtension(document.Name, null)
+                                 + "_civilgpt.log";
+
+                var builder = new System.Text.StringBuilder();
+                builder.AppendLine("Слой: " + layerName);
+                builder.AppendLine("Кривых: " + result.CurvesFound);
+                builder.AppendLine("Подписей: " + result.LabelsParsed
+                                   + ", привязано: " + result.LabelsMatched
+                                   + ", с других слоёв: " + result.LabelsFromOtherLayers);
+                builder.AppendLine("Цепочек: " + result.ChainsBuilt
+                                   + ", с подписью: " + result.ChainsLabeled
+                                   + ", без подписи: " + result.ChainsUnlabeled);
+                builder.AppendLine("Не разрешено: " + result.Unresolved);
+                builder.AppendLine("Создано полилиний: " + result.ContoursCreated);
+                builder.AppendLine();
+                builder.AppendLine("X\tY\tПодпись\tПолная\tОтметка\tОтрезков");
+
+                foreach (ContourChainInfo chain in result.Chains)
+                {
+                    builder.AppendLine(string.Join("\t", new[]
+                    {
+                        chain.X.ToString("F1", System.Globalization.CultureInfo.InvariantCulture),
+                        chain.Y.ToString("F1", System.Globalization.CultureInfo.InvariantCulture),
+                        chain.LabelText ?? "(нет)",
+                        chain.IsFull ? "да" : "нет",
+                        chain.Elevation.HasValue
+                            ? chain.Elevation.Value.ToString("F3", System.Globalization.CultureInfo.InvariantCulture)
+                            : "-",
+                        chain.Segments.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    }));
+                }
+
+                System.IO.File.WriteAllText(
+                    logPath, builder.ToString(), new System.Text.UTF8Encoding(false));
+
+                editor.WriteLine($"Подробный отчёт: {logPath}");
+            }
+            catch (System.Exception ex)
+            {
+                editor.WriteLine("Не удалось записать отчёт: " + ex.Message);
+            }
         }
 
         private static void Report(EditorService editor, ContourLiftResult result, string layerName)

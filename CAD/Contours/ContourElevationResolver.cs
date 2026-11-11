@@ -53,7 +53,9 @@ namespace CivilGPT.CAD.Contours
                 if (anchor.Elevation.Value > maximum) maximum = anchor.Elevation.Value;
             }
 
-            PropagateByNeighbours(chains, step, minimum, maximum);
+            bool enforceRange = maximum - minimum >= 1.0;
+
+            PropagateByNeighbours(chains, step, minimum, maximum, enforceRange);
 
             // Что не удалось определить по соседям — по ближайшей опоре,
             // но с той же проверкой допустимого диапазона.
@@ -63,7 +65,7 @@ namespace CivilGPT.CAD.Contours
                 if (chain.Label == null || chain.Label.IsFull) continue;
 
                 chain.Elevation = ChooseNearestToAnchor(
-                    chain.Label.Value, chain.Anchor, anchors, step, minimum, maximum);
+                    chain.Label.Value, chain.Anchor, anchors, step, minimum, maximum, enforceRange);
             }
         }
 
@@ -72,8 +74,15 @@ namespace CivilGPT.CAD.Contours
         /// Запаса не даём: при опорах 203.00…204.00 значение 202.90 невозможно —
         /// иначе соседняя опора 203.00 тянет подпись «90» на метр вниз.
         /// </summary>
-        private static bool IsAllowed(double value, double step, double minimum, double maximum)
+        private static bool IsAllowed(
+            double value,
+            double step,
+            double minimum,
+            double maximum,
+            bool enforceRange)
         {
+            if (!enforceRange) return true;
+
             return value >= minimum - 1e-6 && value <= maximum + 1e-6;
         }
 
@@ -81,7 +90,8 @@ namespace CivilGPT.CAD.Contours
             IList<ContourChain> chains,
             double step,
             double minimum,
-            double maximum)
+            double maximum,
+            bool enforceRange)
         {
             List<int>[] neighbors = BuildNeighbours(chains);
 
@@ -106,8 +116,8 @@ namespace CivilGPT.CAD.Contours
                         ContourChain neighbor = chains[index];
                         if (!neighbor.Elevation.HasValue) continue;
 
-                        AddCandidate(candidates, neighbor.Elevation.Value + step, chain.Label.Value, step, minimum, maximum);
-                        AddCandidate(candidates, neighbor.Elevation.Value - step, chain.Label.Value, step, minimum, maximum);
+                        AddCandidate(candidates, neighbor.Elevation.Value + step, chain.Label.Value, step, minimum, maximum, enforceRange);
+                        AddCandidate(candidates, neighbor.Elevation.Value - step, chain.Label.Value, step, minimum, maximum, enforceRange);
                     }
 
                     // Значение принимается, только если оно единственное:
@@ -127,10 +137,11 @@ namespace CivilGPT.CAD.Contours
             double shortLabel,
             double step,
             double minimum,
-            double maximum)
+            double maximum,
+            bool enforceRange)
         {
             if (!MatchesRemainder(value, shortLabel)) return;
-            if (!IsAllowed(value, step, minimum, maximum)) return;
+            if (!IsAllowed(value, step, minimum, maximum, enforceRange)) return;
 
             foreach (double existing in candidates)
             {
@@ -243,7 +254,8 @@ namespace CivilGPT.CAD.Contours
             IReadOnlyList<ContourChain> anchors,
             double step,
             double minimum,
-            double maximum)
+            double maximum,
+            bool enforceRange)
         {
             ContourChain nearest = null;
             double bestDistance = double.MaxValue;
@@ -276,7 +288,7 @@ namespace CivilGPT.CAD.Contours
             {
                 double candidate = meter + fraction;
 
-                if (!IsAllowed(candidate, step, minimum, maximum)) continue;
+                if (!IsAllowed(candidate, step, minimum, maximum, enforceRange)) continue;
 
                 double delta = Math.Abs(candidate - reference);
                 if (delta < bestDelta)
