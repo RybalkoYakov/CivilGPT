@@ -465,7 +465,7 @@ namespace CivilGPT.CAD.Contours
                     continue;
                 }
 
-                if (!onSourceLayer && IsTableLayer(entityLayer)) continue;
+                if (!onSourceLayer) continue;
 
                 ContourLabel label = ContourLabelReader.TryRead(transaction, entity);
                 if (label == null) continue;
@@ -485,15 +485,9 @@ namespace CivilGPT.CAD.Contours
 
             labels.AddRange(ownLabels);
 
-            int accepted = 0;
-
-            foreach (ContourLabel label in FilterForeign(ownLabels, otherLayerLabels))
-            {
-                labels.Add(label);
-                accepted++;
-            }
-
-            foreignLabels = accepted;
+            // Подписи берутся только со слоя горизонталей: на чужих слоях лежат
+            // подписи других листов, и они дают ложные опоры (202.5 рядом с 203.4).
+            foreignLabels = 0;
 
             return ignoredCallouts;
         }
