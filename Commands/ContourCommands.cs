@@ -131,6 +131,11 @@ namespace CivilGPT.Commands
             editor.WriteLine("--- Подготовка горизонталей завершена ---");
             editor.WriteLine($"Кривых на слое '{layerName}': {result.CurvesFound}");
             editor.WriteLine($"Подписей распознано: {result.LabelsParsed}, привязано к линиям: {result.LabelsMatched}");
+
+            if (result.LabelsFromOtherLayers > 0)
+            {
+                editor.WriteLine($"Из них взято с других слоёв: {result.LabelsFromOtherLayers}.");
+            }
             editor.WriteLine(
                 $"Собрано горизонталей из отрезков: {result.ChainsBuilt} " +
                 $"(с подписью {result.ChainsLabeled}, без подписи {result.ChainsUnlabeled})");
@@ -165,9 +170,32 @@ namespace CivilGPT.Commands
             if (!result.HasResult)
             {
                 editor.WriteLine("");
-                editor.WriteLine("Ни одной полилинии не создано. Проверьте:");
-                editor.WriteLine("  — подписи лежат на слое и рядом с линиями;");
-                editor.WriteLine("  — допуск привязки достаточен (по умолчанию 1 м).");
+
+                if (result.CurvesFound == 0)
+                {
+                    editor.WriteLine(
+                        $"На слое '{layerName}' нет кривых — выбранный объект относится к другому слою.");
+                }
+                else if (result.LabelsParsed == 0)
+                {
+                    editor.WriteLine(
+                        "Подписей горизонталей не найдено ни на одном слое. " +
+                        "Проверьте, что подписи — тексты или атрибуты блоков, а не мультивыноски.");
+                }
+                else
+                {
+                    editor.WriteLine("Ни одной полилинии не создано. Проверьте:");
+                    editor.WriteLine("  — подписи лежат рядом с линиями;");
+                    editor.WriteLine("  — допуск привязки достаточен (по умолчанию 1 м).");
+                }
+            }
+            else if (result.ContoursCreated * 5 < result.CurvesFound)
+            {
+                editor.WriteLine("");
+                editor.WriteLine(
+                    $"Внимание: отрисовано {result.ContoursCreated} из {result.CurvesFound} кривых. " +
+                    "Похоже, подписи относятся к другому листу или слою — проверьте, " +
+                    "что выбрана горизонталь нужного листа.");
             }
         }
     }

@@ -51,6 +51,9 @@ namespace CivilGPT.CAD.Contours
         /// </summary>
         public int LabelsIgnoredCallouts { get; set; }
 
+        /// <summary>Подписей взято с других слоёв.</summary>
+        public int LabelsFromOtherLayers { get; set; }
+
         public double MinElevation { get; set; }
 
         public double MaxElevation { get; set; }
@@ -123,8 +126,11 @@ namespace CivilGPT.CAD.Contours
             var curves = new List<Curve>();
             var labels = new List<ContourLabel>();
 
+            int foreignLabels;
             result.LabelsIgnoredCallouts = Collect(
-                transaction, modelSpaceId, sourceLayer, curves, labels);
+                transaction, modelSpaceId, sourceLayer, curves, labels, out foreignLabels);
+
+            result.LabelsFromOtherLayers = foreignLabels;
 
             result.CurvesFound = curves.Count;
             result.LabelsParsed = labels.Count;
@@ -349,39 +355,53 @@ namespace CivilGPT.CAD.Contours
         }
 
         /// <summary>
-        /// Собрать горизонтали и подписи с указанного слоя.
-        /// Возвращает количество отклонённых мультивыносок.
+        /// Собрать горизонтали с указанного слоя, а подписи — со всех слоёв:
+        /// на разных листах подписи лежат то вместе с линиями, то отдельным слоем.
+        /// Слои с таблицами (экспликации, стройсетка) исключаются: там номера
+        /// зданий вида 106.12, которые выглядят как отметки.
         /// </summary>
         public static int Collect(
             Transaction transaction,
             ObjectId spaceId,
             string layerName,
             List<Curve> curves,
-            List<ContourLabel> labels)
+            List<ContourLabel> labels,
+            out int foreignLabels)
         {
-            if (string.IsNullOrWhiteSpace(layerName)) return 0;
+            if (string.IsNullOrWhiteSpace(layerName))
+            {
+                foreignLabels = 0;
+                return 0;
+            }
 
             int ignoredCallouts = 0;
+            foreignLabels = 0;
 
             var space = transaction.GetObject(spaceId, OpenMode.ForRead) as BlockTableRecord;
             if (space == null) return 0;
+
+            var ownLabels = new List<ContourLabel>();
+            var otherLayerLabels = new List<ContourLabel>();
 
             foreach (ObjectId id in space)
             {
                 var entity = transaction.GetObject(id, OpenMode.ForRead) as Entity;
                 if (entity == null) continue;
 
-                if (!string.Equals(entity.Layer, layerName, StringComparison.OrdinalIgnoreCase))
+                string entityLayer = entity.Layer ?? string.Empty;
+
+                bool onSourceLayer = string.Equals(
+                    entityLayer, layerName, StringComparison.OrdinalIgnoreCase);
+
+                var curve = entity as Curve;
+
+                if (curve != null)
                 {
+                    if (onSourceLayer) curves.Add(curve);
                     continue;
                 }
 
-                var curve = entity as Curve;
-                if (curve != null)
-                {
-                    curves.Add(curve);
-                    continue;
-                }
+                if (!onSourceLayer && IsTableLayer(entityLayer)) continue;
 
                 ContourLabel label = ContourLabelReader.TryRead(transaction, entity);
                 if (label == null) continue;
@@ -395,10 +415,74 @@ namespace CivilGPT.CAD.Contours
                     continue;
                 }
 
-                labels.Add(label);
+                if (onSourceLayer) ownLabels.Add(label);
+                else otherLayerLabels.Add(label);
             }
 
+            labels.AddRange(ownLabels);
+
+            int accepted = 0;
+
+            foreach (ContourLabel label in FilterForeign(ownLabels, otherLayerLabels))
+            {
+                labels.Add(label);
+                accepted++;
+            }
+
+            foreignLabels = accepted;
+
             return ignoredCallouts;
+        }
+
+        /// <summary>
+        /// Подписи с других слоёв принимаются только в диапазоне отметок
+        /// самого слоя горизонталей: иначе на чертеже находится «1.10»
+        /// или номер здания и становится опорой.
+        /// </summary>
+        private static IEnumerable<ContourLabel> FilterForeign(
+            IReadOnlyList<ContourLabel> ownLabels,
+            IReadOnlyList<ContourLabel> foreignLabels)
+        {
+            double minimum = double.MaxValue;
+            double maximum = double.MinValue;
+
+            foreach (ContourLabel label in ownLabels)
+            {
+                if (!label.IsFull) continue;
+
+                if (label.Value < minimum) minimum = label.Value;
+                if (label.Value > maximum) maximum = label.Value;
+            }
+
+            bool hasBand = maximum > minimum;
+
+            foreach (ContourLabel label in foreignLabels)
+            {
+                if (!label.IsFull)
+                {
+                    // Сокращённые подписи проверяются диапазоном позже, при развороте.
+                    yield return label;
+                    continue;
+                }
+
+                if (hasBand && (label.Value < minimum - 5.0 || label.Value > maximum + 5.0))
+                {
+                    continue;
+                }
+
+                yield return label;
+            }
+        }
+
+        /// <summary>
+        /// Слои оформления, где числа — это номера зданий, а не отметки.
+        /// </summary>
+        private static bool IsTableLayer(string layerName)
+        {
+            if (string.IsNullOrEmpty(layerName)) return false;
+
+            return layerName.IndexOf("экспликац", StringComparison.OrdinalIgnoreCase) >= 0
+                   || layerName.IndexOf("стройсетк", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         /// <summary>
